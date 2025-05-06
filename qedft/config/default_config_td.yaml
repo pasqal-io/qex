@@ -1,0 +1,104 @@
+# Configuration for KS-DFT in 3D
+
+# Molecule and experiment settings
+molecule: "H4"  # Options: H2, H4
+experiment_name: "test7-h4-conv-dqc-4q-d14-explicit-impcode-4datapoints-adam-no-frac"
+exp_model: "ConvDQC"
+rng: 0
+
+# Core settings
+implicit_differentiation: false  # Faster but can be unstable
+method: "fci"  # Options: ccsd, fci, rks
+platform: "gpu"  # Options: cpu, gpu
+
+# Dataset configuration
+dataset: [0, 5, 9]  # Note: 10 cannot be used at 90 deg as FCI cannot converge
+
+# Training parameters
+optimizer: "adam"
+learning_rate: 0.00005
+n_iterations: 1000
+checkpoint: 10
+
+# DFT cycles
+max_cycle_dataset: 10  # Use 20 for paper results
+max_cycle: 10  # Range: 5-40 for KSR, 20 for paper results
+
+# Fractional occupation settings
+frac_mo_occ: 1  # Options: 1, fermi, null, or array
+frac_theta: 0.2  # 0.04 (H2), 0.2-0.4 (H4)
+frac_max_steps: 100
+frac_mu: null
+frac_mu_shift: 0.001
+frac_step_grad: 0.6
+
+# Regularization
+discount_coeffs: true
+regularization: null  # Options: l1, l2
+regularization_strength: 0.0
+
+# Standard quantum parameters
+n_qubits: 4
+n_var_layers: 14
+n_out: 1
+scaler_angles: 1.0
+normalization: 1.0
+deriv: 0
+feature_map: "direct"  # Options: chebyshev, direct, product
+single_qubit_rotations: ["ry", "rz", "ry"]
+use_coordinates: false
+output_wrapper: "identity"  # Options: identity, swish, swish_and_norm
+
+# Advanced DQC settings
+scaler_input: 1.0
+initial_output_scalers: 1.0
+n_reupload_layers: 1
+use_same_parameters: false
+output_operators: ["Z"]
+use_bias: false
+entangling_block_type: "linear"  # Options: linear, full, sca, alternate, circular, alternate_circular
+chebyshev_reuploading: false
+normalize_inputs: false
+normalize_only_density: false
+use_rzz_parametrized_entanglers: false
+use_correlators_in_output: false
+add_reversed_rzz: false
+use_relative_encoding: false  # Warning: Not working
+use_parametrized_observables: false
+
+# Model-specific settings
+## LinCombDQC
+list_features: [1, 2, 4]
+
+## ConvDQC
+last_layer_type: "dense"  # Options: conv, mlp
+output_wrapper_last_layer: "swish_and_norm"  # Options: identity, swish, swish_and_norm
+trainable_feature_map_in_conv: false
+max_features_per_dqc: 1000000
+max_number_conv_layers: 1
+largest_kernel_width: 1000000
+list_qubits_per_layer: []
+force_qubits_per_layer_is_kernel_width: false
+
+## MLP settings
+features: [100, 100, 1]
+act_fn: "softplus"  # Options: softplus, tanh, relu, swish
+act_fn_last: "swish"
+use_bias_mlp: false
+n_features: 1
+exp_num_input_dimensions: 1
+scaler_output: 0.2
+
+# DFT settings
+use_ccsd_triples_correction: true
+xc: "b3lyp"  # Options: lda, pbe, pbe0, b3lyp
+basis: "631g"  # Warning: Never use sto3g
+units: "A"  # Options: A, B
+symmetry: false
+level: 0
+
+# XC settings
+xc_normalize_with_density: false
+xc_normalize_with_log: false
+xc_method: "density"  # Options: density_and_gradient, density, kasim
+xc_deriv: 0  # Options: 0, 1, 2

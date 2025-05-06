@@ -1,0 +1,34 @@
+# Exclude vscode config files
+.vscode/
+
+# Exclude .DS_Store files from being added
+.DS_Store
+
+# Distribution / packaging
+*.egg
+*egg-info
+
+# Cache
+/
+
+# Python cache
+__pycache__/
+
+__py**
+
+# Python bytecode
+*.pyc
+
+# Legacy repository
+old_od_repository/
+old_td_repository/
+old_horqrux/
+
+# Dev folders
+*_dev/
+# Checkpoints
+*ckpt
+ckpts/
+
+# Data
+data/td/

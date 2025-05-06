@@ -1,0 +1,90 @@
+# General experiment settings
+name: test
+experiment_name: test
+network_type: ksr                         # mlp, dqc, adqc, gadqc, ksr, mlp_ksr, conv_dqc, dqc_tfm, gadqc_with_mlp
+molecule_name: h2                         # h2, h2_h2, h4, h2_plus allowed
+molecule_names: [h2, h4]                  # Names of molecules for multiple molecules
+dataset: [128, 384]                       # Dataset dimensions
+dataset1: [128, 384]                      # Dataset dimensions for first molecule
+dataset2: [160, 240]                      # Dataset dimensions for second molecule
+rng: 0
+save_plot_loss: false                     # Whether to save loss plots
+save_every_n: 20                          # Save checkpoint every N steps
+
+# Classical neural network parameters
+activation: tanh                          # tanh, relu, sigmoid, softplus
+n_neurons: 32                             # Number of neurons per layer
+n_layers: 1                               # Number of classical layers
+
+# Quantum circuit parameters
+n_qubits: 9                               # Number of qubits in quantum circuit
+n_reupload_layers: 1                      # Number of data re-uploading layers
+use_rzz_parametrized_entanglers: false    # Whether to use parameterized RZZ gates
+chebychev_reuploading: false              # Whether to use Chebyshev polynomials for re-uploading
+add_reversed_rzz: false                   # Whether to add reversed RZZ gates
+entangling_block_type: alternate_linear   # Type of entangling block architecture
+single_qubit_rotations: [rz, rx, rz]      # Single qubit rotation gates to use
+use_same_parameters: false                # Whether to reuse parameters across layers
+
+# Feature engineering
+add_negative_transform: false             # Add negative transform to features
+wrap_with_self_interaction_layer: false   # Add self-interaction layer
+wrap_with_global_functional: false        # Add global functional wrapper
+
+# Output measurement settings
+use_correlators_in_output: false          # Use correlator operators in output
+output_operators: [Z]                     # Quantum operators to measure
+use_bias_in_output: false                 # Add bias term to output
+
+# Training parameters
+max_train_steps: 10000                    # Maximum number of training steps
+factr: 1.0                                # L-BFGS convergence factor
+pgtol: 1.0e-14                            # L-BFGS gradient tolerance
+m: 20                                     # L-BFGS memory parameter
+maxfun: 20                                # Maximum number of function evaluations
+maxiter: 2                                # Maximum number of iterations
+
+# DFT parameters
+num_iterations: 15                        # Number of SCF iterations
+ks_iter_to_ignore: 10                     # Number of initial iterations to ignore
+discount_factor: 0.9                      # Discount factor for density mixing
+alpha: 0.5                                # Initial mixing parameter
+alpha_decay: 0.9                          # Decay rate for mixing parameter
+num_mixing_iterations: 1                  # Number of density mixing iterations
+density_mse_converge_tolerance: -1.0      # Convergence tolerance (-1 = disabled)
+stop_gradient_step: -1                    # When to stop gradient (-1 = never)
+enforce_reflection_symmetry: false        # Enforce reflection symmetry
+use_relative_encoding: false              # Use relative position encoding
+num_grids: 513                            # Number of spatial grid points
+use_amplitude_encoding: false             # Whether to use amplitude encoding
+
+# QConv settings
+max_number_conv_layers: 100               # Maximum number of convolutional layers
+list_qubits_per_layer: []                 # List of qubits per layer
+force_qubits_per_layer_is_kernel_width: false  # Force qubits per layer to be kernel width
+feature_map_type: direct                  # Type of feature map
+final_mlp_layers: [1]                     # Final MLP layers configuration
+dont_use_parametrized_observables: true   # Do not use parameterized observables
+
+# GADQC electron settings
+use_nel_as_input_with_mlp: false          # Use number of electrons as input with MLP
+nel_exc_combination_type: sum             # Combination type for number of electrons and excitations
+nel_mlp_layers: [1]                       # MLP layers for number of electrons
+density_normalization_factor: 2.0         # Normalization factor for density
+
+# GPU settings
+use_pmap_for_gpu_per_molecule: false      # Use pmap for GPU per molecule
+
+# KSR settings
+num_global_filters: 16                    # Number of global convolutional filters
+num_local_filters: 16                     # Number of local convolutional filters
+num_local_conv_layers: 2                  # Number of local convolutional layers
+ksr_activation: swish                     # Activation function for KSR model
+ksr_minval: 0.1                           # Minimum value for grid spacing
+ksr_maxval: 2.385345                      # Maximum value for grid spacing
+ksr_downsample_factor: 0                  # Downsampling factor for convolutions
+use_exponential_coulomb: true             # Use exponential Coulomb interaction
+
+# JIT settings
+jit_loss: true                             # JIT loss function
+jit_neural_xc: true                       # JIT XC functional

@@ -1,0 +1,100 @@
+{
+    "name": "test_vase",
+    "experiment_name": "test",
+    "network_type": "mlp",
+    "molecule_name": "h2",
+    "molecule_names": [
+        "h2",
+        "h4"
+    ],
+    "dataset": [
+        42,
+        384
+    ],
+    "dataset1": [
+        128,
+        384
+    ],
+    "dataset2": [
+        160,
+        240
+    ],
+    "rng": 0,
+    "save_plot_loss": false,
+    "save_every_n": 42,
+    "activation": "tanh",
+    "n_neurons": 42,
+    "n_layers": 42,
+    "n_qubits": 42,
+    "n_reupload_layers": 42,
+    "use_rzz_parametrized_entanglers": false,
+    "chebychev_reuploading": false,
+    "add_reversed_rzz": false,
+    "entangling_block_type": "circular",
+    "single_qubit_rotations": [
+        "rx",
+        "rz",
+        "rx"
+    ],
+    "use_same_parameters": false,
+    "add_negative_transform": false,
+    "wrap_with_self_interaction_layer": false,
+    "wrap_with_global_functional": false,
+    "use_correlators_in_output": false,
+    "output_operators": [
+        "Z"
+    ],
+    "use_bias_in_output": false,
+    "max_train_steps": 42,
+    "factr": 1.0,
+    "pgtol": 1e-14,
+    "m": 42,
+    "maxfun": 20,
+    "maxiter": 2,
+    "num_iterations": 20,
+    "ks_iter_to_ignore": 10,
+    "discount_factor": 0.9,
+    "alpha": 0.5,
+    "alpha_decay": 0.9,
+    "num_mixing_iterations": 1,
+    "density_mse_converge_tolerance": -1.0,
+    "stop_gradient_step": -1,
+    "enforce_reflection_symmetry": false,
+    "use_relative_encoding": false,
+    "num_grids": 42,
+    "use_amplitude_encoding": false,
+    "max_number_conv_layers": 100,
+    "list_qubits_per_layer": [],
+    "force_qubits_per_layer_is_kernel_width": false,
+    "feature_map_type": "direct",
+    "final_mlp_layers": [
+        1
+    ],
+    "dont_use_parametrized_observables": true,
+    "use_nel_as_input_with_mlp": false,
+    "nel_exc_combination_type": "sum",
+    "nel_mlp_layers": [
+        1
+    ],
+    "density_normalization_factor": 2.0,
+    "use_pmap_for_gpu_per_molecule": false,
+    "num_global_filters": 16,
+    "num_local_filters": 16,
+    "num_local_conv_layers": 2,
+    "ksr_activation": "swish",
+    "ksr_minval": 0.1,
+    "ksr_maxval": 2.385345,
+    "ksr_downsample_factor": 0,
+    "use_exponential_coulomb": true,
+    "jit_loss": true,
+    "jit_neural_xc": true,
+    "model": {
+        "quantum": {
+            "n_qubits": 4
+        }
+    },
+    "training": {
+        "batch_size": 32
+    },
+    "discount": 0.9
+}

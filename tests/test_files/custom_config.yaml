@@ -1,0 +1,48 @@
+# Experiment settings
+name: test_vase                                # Name of the experiment
+network_type: mlp                         # Type of neural network (mlp = multilayer perceptron)
+dataset: [42, 384]                       # Dataset dimensions
+save_plot_loss: false                     # Whether to save loss plots
+
+# Classical neural network parameters
+activation: tanh                          # Activation function for classical layers
+n_neurons: 42                            # Number of neurons per layer
+n_layers: 42                               # Number of classical layers
+
+# Quantum circuit parameters
+n_qubits: 42                              # Number of qubits in quantum circuit
+n_reupload_layers: 42                      # Number of data re-uploading layers
+use_rzz_parametrized_entanglers: false    # Whether to use parameterized RZZ gates
+chebychev_reuploading: false             # Whether to use Chebyshev polynomials for re-uploading
+add_reversed_rzz: false                   # Whether to add reversed RZZ gates
+entangling_block_type: circular           # Type of entangling block architecture
+single_qubit_rotations: [rx, rz, rx]      # Single qubit rotation gates to use
+use_same_parameters: false                # Whether to reuse parameters across layers
+save_every_n: 42                          # Save checkpoint every N steps
+
+# Feature engineering
+add_negative_transform: false             # Add negative transform to features
+wrap_with_self_interaction_layer: false   # Add self-interaction layer
+wrap_with_global_functional: false        # Add global functional wrapper
+use_correlators_in_output: false          # Use correlator operators in output
+output_operators: [Z]                     # Quantum operators to measure
+use_bias_in_output: false                 # Add bias term to output
+
+# Training parameters
+max_train_steps: 42                    # Maximum number of training steps
+factr: 1.0                               # L-BFGS convergence factor
+pgtol: 1.0e-14                           # L-BFGS gradient tolerance
+m: 42                                    # L-BFGS memory parameter
+
+# DFT parameters
+num_iterations: 20                        # Number of SCF iterations
+ks_iter_to_ignore: 10                     # Number of initial iterations to ignore
+discount: 0.9                            # Discount factor for density mixing
+alpha: 0.5                               # Initial mixing parameter
+alpha_decay: 0.9                         # Decay rate for mixing parameter
+num_mixing_iterations: 1                  # Number of density mixing iterations
+density_mse_converge_tolerance: -1.0      # Convergence tolerance (-1 = disabled)
+stop_gradient_step: -1                    # When to stop gradient (-1 = never)
+enforce_reflection_symmetry: false        # Enforce reflection symmetry
+use_relative_encoding: false             # Use relative position encoding
+num_grids: 42                           # Number of spatial grid points

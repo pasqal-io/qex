@@ -1,0 +1,12 @@
+{
+    "model": {
+        "quantum": {
+            "n_qubits": 5,
+            "depth": 3
+        }
+    },
+    "dft": {
+        "num_grids": 100,
+        "convergence_threshold": 1e-6
+    }
+}
