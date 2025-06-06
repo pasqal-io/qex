@@ -15,10 +15,7 @@ from pyscf.gto.moleintor import make_loc
 from pyscfad.gto._mole_helper import get_fakemol_cs, get_fakemol_exp, setup_ctr_coeff, setup_exp
 from pyscfad.gto._moleintor_helper import get_bas_label, promote_xyz
 
-try:
-    from pyscfad.lib import custom_jvp, jit, vmap
-except ImportError:
-    from pyscfad.ops import custom_jvp, jit, vmap
+from pyscfad.backend.ops import custom_jvp, jit, vmap
 
 
 def eval_gto(

@@ -399,7 +399,7 @@ if __name__ == "__main__":
     print("Output noise:", result)
 
     # Same for QNNs
-    from horqrux.utils import zero_state
+    from horqrux.utils.operator_utils import zero_state
 
     from qedft.models.quantum.hardware_ansatz import hea
 

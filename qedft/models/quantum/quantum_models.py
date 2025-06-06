@@ -46,7 +46,8 @@ from chex import Array
 from horqrux import QuantumCircuit, expectation
 from horqrux.noise import NoiseProtocol
 from horqrux.primitives.primitive import Primitive
-from horqrux.utils import DiffMode, TargetQubits, random_state, zero_state
+from horqrux.utils import random_state, zero_state
+from horqrux.utils.operator_utils import DiffMode, TargetQubits
 from jax import vmap
 from loguru import logger
 

@@ -8,7 +8,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 from horqrux.noise import NoiseProtocol
-from horqrux.utils import DiffMode
+from horqrux.utils.operator_utils import DiffMode
 from jax.example_libraries import stax
 from loguru import logger
 

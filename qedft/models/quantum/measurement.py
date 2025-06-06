@@ -22,7 +22,7 @@ from horqrux import expectation
 from horqrux.apply import apply_gates as apply_gate
 from horqrux.composite import Observable
 from horqrux.primitives.primitive import Primitive, Z
-from horqrux.utils import State, inner
+from horqrux.utils.operator_utils import State, inner
 
 
 def qubit_magnetization(state: State) -> Array:

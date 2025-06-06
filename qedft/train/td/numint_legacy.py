@@ -14,7 +14,8 @@ from pyscf.lib import load_library
 
 # from pyscfad.lib import vmap
 from pyscfad.dft import libxc
-from pyscfad.lib import custom_jvp, jit, ops, stop_grad
+from pyscfad.backend.ops import custom_jvp, jit, stop_grad
+import pyscfad.backend.ops as ops
 
 libdft = load_library("libdft")
 

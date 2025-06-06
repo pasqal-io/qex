@@ -11,7 +11,7 @@ import numpy as np
 from horqrux import zero_state
 from horqrux.apply import apply_gates as apply_gate
 from horqrux.primitives.primitive import NOT, Primitive
-from horqrux.utils import State
+from horqrux.utils.operator_utils import State
 
 
 def get_entangler_map(

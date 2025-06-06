@@ -17,7 +17,7 @@ from horqrux.composite import Observable
 from horqrux.primitives import H, Z
 from horqrux.primitives.parametric import RX
 from horqrux.primitives.primitive import NOT
-from horqrux.utils import density_mat
+from horqrux.utils.operator_utils import density_mat
 from jax.experimental import checkify
 
 from qedft.models.quantum.measurement import qubit_magnetization, total_magnetization
