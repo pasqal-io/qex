@@ -29,7 +29,7 @@ import jax
 import jax.numpy as jnp
 from horqrux import zero_state
 from horqrux.noise import NoiseProtocol
-from horqrux.utils import DiffMode
+from horqrux.utils.operator_utils import DiffMode
 from loguru import logger
 
 from qedft.models.quantum.hardware_ansatz import hea

@@ -27,8 +27,8 @@ from pyscfad import config, df, lib
 from pyscfad import numpy as np
 from pyscfad import util
 from pyscfad.implicit_diff import make_implicit_diff
-from pyscfad.lib import jit, logger, stop_trace
-from pyscfad.ops import stop_grad
+from pyscfad.lib import logger
+from pyscfad.backend.ops import jit, stop_trace, stop_grad
 from pyscfad.scf import _vhf, chkfile
 from pyscfad.scf.diis import SCF_DIIS
 from pyscfad.scipy.linalg import eigh

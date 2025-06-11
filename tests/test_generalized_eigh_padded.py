@@ -1,12 +1,12 @@
 """Test the generalized eigh function with padded matrices."""
+
 import jax
 import jax.numpy as jnp
 import pytest
 from jax import random
 
 from qedft.train.td.generalized_eigensolver import generalized_eigh
-from qedft.train.td.generalized_eigensolver_masked import \
-    masked_generalized_eigh
+from qedft.train.td.generalized_eigensolver_masked import masked_generalized_eigh
 
 # Enable double precision
 jax.config.update("jax_enable_x64", True)
@@ -291,7 +291,12 @@ def test_edge_cases(setup_edge_cases):
         test_energy, test_coeff = masked_generalized_eigh(f_padded, s_padded, mask)
 
         # Check that eigenvalues match in the real region
-        if case_name in ["degenerate", "ill_conditioned", "negative_eigenvalues", "zero_eigenvalues"]:
+        if case_name in [
+            "degenerate",
+            "ill_conditioned",
+            "negative_eigenvalues",
+            "zero_eigenvalues",
+        ]:
             # For degenerate case, check that the first eigenvalue matchesd
             # since we have a special eigh for degenerate case
             assert jnp.allclose(
@@ -345,11 +350,11 @@ def test_special_masks(setup_special_masks):
 
     for case_name, data in special_masks.items():
         # Get the matrices and mask
-        f_padded = data['f_padded']
-        s_padded = data['s_padded']
-        mask = data['mask']
-        ref_energy = data['ref_energy']
-        indices = data['indices']
+        f_padded = data["f_padded"]
+        s_padded = data["s_padded"]
+        mask = data["mask"]
+        ref_energy = data["ref_energy"]
+        indices = data["indices"]
         real_size = len(indices)
 
         # Run the masked solver
@@ -365,8 +370,9 @@ def test_special_masks(setup_special_masks):
         sorted_ref_energy = ref_energy[sorted_ref_indices]
 
         # Check that the eigenvalues match (only the lowest ones matter)
-        assert jnp.allclose(sorted_energy[0], sorted_ref_energy[0], atol=1e-5), \
-                f"Eigenvalues don't match for case: {case_name}"
+        assert jnp.allclose(
+            sorted_energy[0], sorted_ref_energy[0], atol=1e-5
+        ), f"Eigenvalues don't match for case: {case_name}"
 
 
 # Test different padding values

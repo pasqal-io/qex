@@ -13,7 +13,8 @@ import jax.numpy as jnp
 import pytest
 from horqrux.apply import apply_gates as apply_gate
 from horqrux.primitives import X
-from horqrux.utils import TargetQubits, random_state
+from horqrux.utils import random_state
+from horqrux.utils.operator_utils import TargetQubits
 
 from qedft.models.quantum.feature_maps import chebyshev, direct, product
 

@@ -28,7 +28,7 @@ from horqrux import zero_state
 from horqrux.apply import apply_gates as apply_gate
 from horqrux.primitives.parametric import RX, RZ
 from horqrux.primitives.primitive import NOT
-from horqrux.utils import State, TargetQubits
+from horqrux.utils.operator_utils import State, TargetQubits
 
 
 def global_entangling(state: State) -> State:

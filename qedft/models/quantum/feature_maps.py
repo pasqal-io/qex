@@ -31,7 +31,7 @@ from chex import Array
 from horqrux.apply import apply_gates as apply_gate
 from horqrux.noise import NoiseProtocol
 from horqrux.primitives.parametric import RY as Ry
-from horqrux.utils import State, TargetQubits
+from horqrux.utils.operator_utils import State, TargetQubits
 from jax.experimental import checkify
 
 
