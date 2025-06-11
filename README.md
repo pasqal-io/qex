@@ -146,7 +146,8 @@ config = {
 
 # Initialize network with STAX and then convert to Flax
 model = GlobalMLP()
-num_grid_points = 1192
+# Number of grid points for the H2 molecule (correct if needed)
+num_grid_points = 1240
 network_stax = model.build_network(grids=jnp.linspace(0, 1, num_grid_points))
 stax_init_fn, stax_apply_fn = network_stax  # your STAX model
 network, params = adapt_stax_for_training(stax_init_fn, stax_apply_fn, (num_grid_points,))
