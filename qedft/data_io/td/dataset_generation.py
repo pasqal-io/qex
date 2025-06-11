@@ -71,7 +71,7 @@ class MoleculeConfig:
     units: Literal["Ang", "B"] = "Ang"
     basis: str = "631g"
     method: Literal["CCSD", "FCI", "rks"] = "CCSD"
-    grid_density: int = 3
+    grid_density: int = 0
     deriv: int = 0
     label: int | str = 0
     custom_grid: FloatArray | None = None
@@ -449,14 +449,25 @@ def calculate_energy_and_density(
         # Correction for the true dm same as in CCSD value.
         dm = 2.0 * dm[0]
 
-        fs = fci.FCI(mol, mf.mo_coeff)
-        dm_fs = fs.make_rdm1(fcivec=c, norb=norb, nelec=mol.nelectron)
+        # FIX for new PySCF: take all the mo coeffs as in UHF
+        fs = fci.FCI(mol, mo_coeffs)
+        # Old version here.
+        # fs = fci.FCI(mol, mf.mo_coeff)
+        dm_fs = fs.make_rdm1s(fcivec=c, norb=norb, nelec=mol.nelectron)
+        # Old version here.
+        # dm_fs = fs.make_rdm1(fcivec=c, norb=norb, nelec=mol.nelectron)
         # assert
         if np.allclose(dm, dm_fs) is False:
             # better prefer FCI dm_fs
             logger.info("    FCI and DFT density are not the same.")
             logger.info("    Using FCI density.")
-            dm = dm_fs / 2.0
+
+            # FIX for new PySCF: should both be the same
+            assert np.allclose(dm_fs[0], dm_fs[1])
+            dm = dm_fs[0] / 2.0
+            # Old version here.
+            # dm = dm_fs / 2.0
+
             dm_ao = 2.0 * mo_coeffs[0] @ dm @ mo_coeffs[0].T
 
         # and then use numint.eval_rho, use Lebdev grid from RKS object, or use any
@@ -520,7 +531,7 @@ if __name__ == "__main__":
         atom_coords="H 0 0 0; H 0 0 0.74",
         units="Ang",
         basis="631g",
-        method="CCSD",
+        method="FCI",
         grid_density=0,
     )
 
