@@ -342,6 +342,7 @@ def build_conv_qnn(
         diff_mode=diff_mode,
         n_shots=n_shots,
         key=key,
+        use_amplitude_encoding=False,  # NOTE: always use angle encoding for these models
     )
     network = stax.serial(*list_conv_layers)
     init_fn, apply_fn = network
