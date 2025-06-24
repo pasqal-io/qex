@@ -20,6 +20,11 @@ So models with GLOBAL embedding should have input:
     - input: jnp.ndarray of shape (n_grids,)
     - output: jnp.ndarray of shape (1,)
     because the output is the total integrated XC energy.
+
+# NOTE: The QNNs also use the parameter use_amplitude_encoding to determine
+# if they use amplitude encoding or angle encoding.
+# use_amplitude_encoding is also used for DFT when using global encoding.
+# will be made more clean in the future.
 """
 
 from collections.abc import Callable
@@ -376,6 +381,9 @@ class GlobalQNN(KohnShamNetwork):
             use_bias_mlp=self.config.get("use_bias_mlp", False),
             last_layer_features=self.config.get("last_layer_features", [1]),
             noise=noise,
+            diff_mode=self.config.get("diff_mode", DiffMode.AD),
+            n_shots=self.config.get("n_shots", 0),
+            key=self.config.get("key", jax.random.PRNGKey(0)),
         )
 
         # Build the full network with the convolutional layers
