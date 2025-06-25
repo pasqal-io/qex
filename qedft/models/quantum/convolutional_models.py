@@ -21,6 +21,31 @@ from qedft.models.networks import (
 from qedft.models.utils import count_parameters
 
 
+def add_gaussian_noise_layer(network: tuple[Callable, Callable], noise_std: float = 0.1):
+    """
+    Wraps a network with a Gaussian noise layer.
+
+    Args:
+        network: A tuple of (init_fn, apply_fn)
+        noise_std: Standard deviation of the Gaussian noise
+
+    Returns:
+        A tuple of (init_fn, apply_fn) with noise added
+    """
+
+    init_fn, apply_fn = network
+
+    def noisy_apply_fn(params, inputs, rng_key=None, **kwargs):
+        outputs = apply_fn(params, inputs, **kwargs)
+        rng = kwargs.get('rng', jax.random.PRNGKey(0))
+        if rng is not None and noise_std > 0:
+            noise = jax.random.normal(rng, shape=outputs.shape) * noise_std
+            return outputs + noise
+        return jnp.array([outputs,])
+
+    return init_fn, noisy_apply_fn
+
+
 def compute_kernel_width_per_layer(
     input_dimension: int,
     largest_kernel_dimension: int,
@@ -100,6 +125,8 @@ def construct_convolutional_model(
     n_shots: int = 0,
     key: jax.random.PRNGKey = jax.random.PRNGKey(0),
     use_amplitude_encoding: bool = False,
+    add_gaussian_noise_to_qnn_output: bool = False,
+    gaussian_noise_std: float = 0.5,
 ):
     """
     Construct a convolutional model with a given input dimension and largest kernel width
@@ -223,6 +250,11 @@ def construct_convolutional_model(
             }
             bmlp = BatchedGlobalMLP(bmlp_config)
             init_fn, apply_fn = bmlp.build_network(grids)
+
+            # Add gaussian noise to the output of QNN in addition to the gate noise
+            if add_gaussian_noise_to_qnn_output:
+                init_fn, apply_fn = add_gaussian_noise_layer((init_fn, apply_fn), gaussian_noise_std)
+
             list_conv_layers.append((init_fn, apply_fn))
 
     # Append an MLP to reduce to 1 scalar output
@@ -290,6 +322,181 @@ def construct_convolutional_model(
     return list_conv_layers
 
 
+def construct_convolutional_model_reverse(
+    n_qubits,
+    n_var_layers,
+    n_out,
+    input_dimension,
+    largest_kernel_width,
+    max_number_conv_layers: int = 100,
+    list_qubits_per_layer: list = [],
+    force_qubits_per_layer_is_kernel_width: bool = False,
+    normalization: float = 1.0,
+    last_layer_type: str = "dense",
+    use_bias_mlp: bool = False,
+    last_layer_features: list = [1],
+    use_qnn_layers: bool = True,
+    noise: NoiseProtocol | None = None,
+    diff_mode: DiffMode = DiffMode.AD,
+    n_shots: int = 0,
+    key: jax.random.PRNGKey = jax.random.PRNGKey(0),
+    use_amplitude_encoding: bool = False,
+    add_gaussian_noise_to_qnn_output: bool = False,
+    gaussian_noise_std: float = 0.5,
+):
+    """
+    Construct a convolutional model with a given input dimension and largest kernel width
+    This is the reverse of the construct_convolutional_model function
+
+    So first classical layers, and the last is a single QNN layer.
+
+    Args:
+            n_qubits ([type]): Number of qubits
+            n_var_layers ([type]): [description]
+            n_out ([type]): [description]
+            input_dimension ([type]): [description]
+            largest_kernel_width ([type]): [description]
+            max_number_conv_layers ([type]): [description]
+            list_qubits_per_layer (list, optional): [description]. Defaults to [].
+            force_qubits_per_layer_is_kernel_width (bool, optional): [description]. Defaults to False.
+            use_qnn_layers (bool, optional): Whether to use QNN layers. Defaults to True.
+            diff_mode (DiffMode, optional): [description]. Defaults to DiffMode.AD.
+            n_shots (int, optional): [description]. Defaults to 0.
+            key (jax.random.PRNGKey, optional): [description]. Defaults to jax.random.PRNGKey(0).
+            use_amplitude_encoding (bool, optional): Whether to use amplitude encoding. Defaults to False.
+    Returns:
+            [type]: [description]
+    """
+    if len(list_qubits_per_layer) != 0 and force_qubits_per_layer_is_kernel_width is False:
+        list_qubits_per_layer = list_qubits_per_layer[:max_number_conv_layers]
+
+    (
+        list_kernel_dimensions,
+        list_outputs_per_conv_layer,
+    ) = compute_kernel_width_per_layer(
+        input_dimension,
+        largest_kernel_width,
+        max_number_conv_layers,
+    )
+
+    list_kernel_dimensions, list_outputs_per_conv_layer = (
+        list_kernel_dimensions[:max_number_conv_layers],
+        list_outputs_per_conv_layer[:max_number_conv_layers],
+    )
+
+    print(
+        "list_kernel_dimensions , list_outputs_per_conv_layer: ",
+        list_kernel_dimensions,
+        list_outputs_per_conv_layer,
+    )
+
+    list_conv_layers = []
+
+    # Select the QNN layer type
+    QNNLayer = AmplitudeEncodingGlobalQNNLayer if use_amplitude_encoding else GlobalQNNLayer
+    logger.info(f"Using {QNNLayer.__name__} layer")
+
+    # Create mock grids for GlobalQNN initialization
+    grids = jnp.ones(input_dimension)
+
+    for i, (kernel_width, n_outputs) in enumerate(
+        zip(list_kernel_dimensions, list_outputs_per_conv_layer),
+    ):
+
+        if not force_qubits_per_layer_is_kernel_width:
+            if len(list_qubits_per_layer) != 0:
+                if list_qubits_per_layer[i] < kernel_width:
+                    raise ValueError(
+                        "The number of qubits per layer cannot be smaller than"
+                        " the kernel width. Cannot embed the data since there"
+                        " are not enough qubits (one rotation - per data point"
+                        " - per qubit).",
+                    )
+                n_qubits_layer = list_qubits_per_layer[i]
+            else:
+                # by default all quantum layers have the same number of qubits
+                n_qubits_layer = n_qubits
+        else:
+            # never have 1 qubits for the variational circuits
+            if kernel_width > 1:
+                n_qubits_layer = kernel_width
+            else:
+                n_qubits_layer = 2
+
+        # BatchedGlobalMLP if you want to replace by a simple MLP
+        logger.info(
+            f"BatchedGlobalMLP Layer {i}: n_qubits_layer\neurons {n_qubits_layer}, kernel_width {kernel_width}",
+        )
+        bmlp_config = {
+            "n_neurons": n_qubits_layer,
+            "n_layers": n_var_layers,
+            "use_bias": use_bias_mlp,
+            "density_normalization_factor": normalization,
+            "n_features": kernel_width,
+            "activation": "tanh",
+            "n_outputs": 1,
+        }
+        bmlp = BatchedGlobalMLP(bmlp_config)
+        init_fn, apply_fn = bmlp.build_network(grids)
+        list_conv_layers.append((init_fn, apply_fn))
+
+    # Add a final MLP layer that outputs n_qubits values
+    if list_outputs_per_conv_layer[-1] > 1:
+        logger.info(f"Adding final MLP layer to output {n_qubits} values for QNN input")
+
+        # Create a dense layer that outputs n_qubits values
+        def init_final_mlp(rng, input_shape):
+            k1, k2 = jax.random.split(rng)
+            output_size = n_qubits
+            input_size = list_outputs_per_conv_layer[-1]  # Use the known output size from previous layer
+            w = jax.random.normal(k1, (input_size, output_size)) * 0.1
+            b = None
+            if use_bias_mlp:
+                b = jax.random.normal(k2, (output_size,)) * 0.1
+            return (output_size,), (w, b)
+
+        def apply_final_mlp(params, inputs, **kwargs):
+            w, b = params
+            # Ensure inputs have the right shape for matrix multiplication
+            inputs_reshaped = inputs.reshape(-1, w.shape[0])
+            out = jnp.dot(inputs_reshaped, w)
+            if b is not None:
+                out = out + b
+            # Apply activation function (tanh to match the pattern)
+            out = jnp.tanh(out)
+            return out.reshape(-1)  # Flatten output
+
+        list_conv_layers.append((init_final_mlp, apply_final_mlp))
+
+    # Add the final QNN layer that takes n_qubits inputs and outputs 1 value
+    logger.info(f"Adding final QNN layer with {n_qubits} qubits")
+
+    # Create GlobalQNN configuration for the final layer
+    qnn_config = {
+        "n_qubits": n_qubits,
+        "n_var_layers": n_var_layers,
+        "normalization": normalization,
+        "use_amplitude_encoding": use_amplitude_encoding,
+        "n_features": n_qubits,  # Input features should match n_qubits
+        "diff_mode": diff_mode,
+        "n_shots": n_shots,
+        "key": key,
+        "wrap_with_negative_transform": True,  # Ensure single output
+    }
+
+    # Create GlobalQNN instance and get its build_network function
+    qnn = QNNLayer(config_dict=qnn_config)
+    init_fn, apply_fn = qnn.build_network(grids, noise=noise)
+
+    # Add gaussian noise to the output of QNN in addition to the gate noise
+    if add_gaussian_noise_to_qnn_output:
+        init_fn, apply_fn = add_gaussian_noise_layer((init_fn, apply_fn), gaussian_noise_std)
+
+    list_conv_layers.append((init_fn, apply_fn))
+
+    return list_conv_layers
+
+
 # ================================================================
 # Factory function
 # ================================================================
@@ -312,6 +519,8 @@ def build_conv_qnn(
     diff_mode: DiffMode = DiffMode.AD,
     n_shots: int = 0,
     key: jax.random.PRNGKey = jax.random.PRNGKey(0),
+    add_gaussian_noise_to_qnn_output: bool = False,
+    gaussian_noise_std: float = 0.5,
 ) -> tuple[Callable, Callable]:
     """Build a convolutional quantum neural network.
 
@@ -343,11 +552,74 @@ def build_conv_qnn(
         n_shots=n_shots,
         key=key,
         use_amplitude_encoding=False,  # NOTE: always use angle encoding for these models
+        add_gaussian_noise_to_qnn_output=add_gaussian_noise_to_qnn_output,
+        gaussian_noise_std=gaussian_noise_std,
     )
     network = stax.serial(*list_conv_layers)
     init_fn, apply_fn = network
 
     return init_fn, apply_fn
+
+
+
+def build_conv_qnn_reverse(
+    n_qubits: int,
+    n_var_layers: int,
+    n_out: int,
+    input_dimension: int,
+    largest_kernel_width: int,
+    max_number_conv_layers: int = 100,
+    list_qubits_per_layer: list[int] = [],
+    force_qubits_per_layer_is_kernel_width: bool = False,
+    normalization: float = 1.0,
+    last_layer_type: str = "dense",
+    use_bias_mlp: bool = False,
+    last_layer_features: list[int] = [1],
+    noise: NoiseProtocol | None = None,
+    diff_mode: DiffMode = DiffMode.AD,
+    n_shots: int = 0,
+    key: jax.random.PRNGKey = jax.random.PRNGKey(0),
+    add_gaussian_noise_to_qnn_output: bool = False,
+    gaussian_noise_std: float = 0.5,
+) -> tuple[Callable, Callable]:
+    """Build a convolutional quantum neural network.
+
+    Args:
+        conv_layers: List of convolutional layers (ConvDQCLayer objects)
+        grids: Grid points for the density functional calculations
+        density_normalization_factor: Scale factor for input normalization
+
+    Returns:
+        (init_fn, apply_fn) tuple of network functions
+    """
+
+    # Construct model
+    list_conv_layers = construct_convolutional_model_reverse(
+        n_qubits=n_qubits,
+        n_var_layers=n_var_layers,
+        n_out=n_out,
+        input_dimension=input_dimension,
+        largest_kernel_width=largest_kernel_width,
+        max_number_conv_layers=max_number_conv_layers,
+        list_qubits_per_layer=list_qubits_per_layer,
+        force_qubits_per_layer_is_kernel_width=force_qubits_per_layer_is_kernel_width,
+        normalization=normalization,
+        last_layer_type=last_layer_type,
+        use_bias_mlp=use_bias_mlp,
+        last_layer_features=last_layer_features,
+        noise=noise,
+        diff_mode=diff_mode,
+        n_shots=n_shots,
+        key=key,
+        use_amplitude_encoding=False,  # NOTE: always use angle encoding for these models
+        add_gaussian_noise_to_qnn_output=add_gaussian_noise_to_qnn_output,
+        gaussian_noise_std=gaussian_noise_std,
+    )
+    network = stax.serial(*list_conv_layers)
+    init_fn, apply_fn = network
+
+    return init_fn, apply_fn
+
 
 
 def build_conv_mlp(
@@ -554,6 +826,31 @@ if __name__ == "__main__":
         ),
     )
 
+    # Test standard QNN with gaussian noise
+    print("\nBuilding REVERSE convolutional QNN via factory function")
+    print("WITH GAUSSIAN NOISE and bitflip and amplitude damping noise")
+    # Test QNN with noise
+    from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
+    # Test with low noise (0.1%)
+    noise = (DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
+            DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1))
+    init_fn, apply_fn = build_conv_qnn_reverse(
+        n_qubits=n_qubits,
+        n_var_layers=n_var_layers,
+        n_out=n_out,
+        input_dimension=input_dimension,
+        largest_kernel_width=largest_kernel_dimension,
+        add_gaussian_noise_to_qnn_output=True,
+        gaussian_noise_std=0.5,
+        noise=noise,
+    )
+
+    _, params = init_fn(jax.random.PRNGKey(0), (input_dimension,))
+    jit_apply_fn = jax.jit(apply_fn)
+    jit_output = jit_apply_fn(params, grids)
+    print("JIT output shape:", jit_output.shape)
+    print("JIT output:", jit_output)
+
     # Test standard QNN (no noise)
     print("\nBuilding convolutional QNN via factory function")
     init_fn, apply_fn = build_conv_qnn(
@@ -562,6 +859,24 @@ if __name__ == "__main__":
         n_out=n_out,
         input_dimension=input_dimension,
         largest_kernel_width=largest_kernel_dimension,
+    )
+
+    _, params = init_fn(jax.random.PRNGKey(0), (input_dimension,))
+    jit_apply_fn = jax.jit(apply_fn)
+    jit_output = jit_apply_fn(params, grids)
+    print("JIT output shape:", jit_output.shape)
+    print("JIT output:", jit_output)
+
+    # Test standard QNN with gaussian noise
+    print("\nBuilding convolutional QNN via factory function WITH GAUSSIAN NOISE")
+    init_fn, apply_fn = build_conv_qnn(
+        n_qubits=n_qubits,
+        n_var_layers=n_var_layers,
+        n_out=n_out,
+        input_dimension=input_dimension,
+        largest_kernel_width=largest_kernel_dimension,
+        add_gaussian_noise_to_qnn_output=True,
+        gaussian_noise_std=0.5,
     )
 
     _, params = init_fn(jax.random.PRNGKey(0), (input_dimension,))
@@ -604,6 +919,31 @@ if __name__ == "__main__":
     jit_output = jit_apply_fn(params, grids)
     print("JIT output with 1% noise, shape:", jit_output.shape)
     print("JIT output with 1% noise:", jit_output)
+
+    # Test standard QNN with gaussian noise
+    print("\nBuilding convolutional QNN via factory function")
+    print("WITH GAUSSIAN NOISE and bitflip and amplitude damping noise")
+    # Test QNN with noise
+    from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
+    # Test with low noise (0.1%)
+    noise = (DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
+            DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1))
+    init_fn, apply_fn = build_conv_qnn(
+        n_qubits=n_qubits,
+        n_var_layers=n_var_layers,
+        n_out=n_out,
+        input_dimension=input_dimension,
+        largest_kernel_width=largest_kernel_dimension,
+        add_gaussian_noise_to_qnn_output=True,
+        gaussian_noise_std=0.5,
+        noise=noise,
+    )
+
+    _, params = init_fn(jax.random.PRNGKey(0), (input_dimension,))
+    jit_apply_fn = jax.jit(apply_fn)
+    jit_output = jit_apply_fn(params, grids)
+    print("JIT output shape:", jit_output.shape)
+    print("JIT output:", jit_output)
 
     # Test amplitude encoding QNN
     init_fn, apply_fn = build_conv_amplitude_encoding_qnn(
