@@ -470,7 +470,7 @@ class GlobalQNNReverse(KohnShamNetwork):
         return network
 
 
-class GlobalQNNReverse(KohnShamNetwork):
+class GlobalQNNClassicalToQuantum(KohnShamNetwork):
     """Convolutional Quantum Neural Network.
 
     This model applies a series of quantum convolutional layers to process
@@ -484,8 +484,8 @@ class GlobalQNNReverse(KohnShamNetwork):
         self.config = {
             "network_type": "conv_dqc",
             "wrap_self_interaction": False,
-            "wrap_with_negative_transform": True,
-            "use_amplitude_encoding": True,  # This model uses global encoding
+            "wrap_with_negative_transform": False,
+            "use_amplitude_encoding": False,  # This model uses global encoding
             "n_qubits": 4,
             "n_var_layers": 2,
             "largest_kernel_width": 4,
@@ -513,28 +513,19 @@ class GlobalQNNReverse(KohnShamNetwork):
         Returns:
             tuple: (init_fn, apply_fn) pair of network initialization and application functions.
         """
-        from qedft.models.quantum.convolutional_models import build_conv_qnn_reverse
+        from qedft.models.quantum.convolutional_models import build_conv_qnn_classical_to_quantum
 
         # Get the input dimension from the grid size
         input_dimension = grids.shape[0]
 
         # Construct the full convolutional model
-        network = build_conv_qnn_reverse(
+        network = build_conv_qnn_classical_to_quantum(
             n_qubits=self.config.get("n_qubits", 4),
             n_var_layers=self.config.get("n_var_layers", 2),
-            n_out=1,  # Always output a single value per point
+            n_out=1,  # NOTE: not used in this model
             input_dimension=input_dimension,
-            largest_kernel_width=self.config.get("largest_kernel_width", 4),
-            max_number_conv_layers=self.config.get("max_number_conv_layers", 100),
-            list_qubits_per_layer=self.config.get("list_qubits_per_layer", []),
-            force_qubits_per_layer_is_kernel_width=self.config.get(
-                "force_qubits_per_layer_is_kernel_width",
-                False,
-            ),
             normalization=self.config.get("normalization", 1.0),
-            last_layer_type=self.config.get("last_layer_type", "dense"),
             use_bias_mlp=self.config.get("use_bias_mlp", False),
-            last_layer_features=self.config.get("last_layer_features", [1]),
             noise=noise,
             diff_mode=self.config.get("diff_mode", DiffMode.AD),
             n_shots=self.config.get("n_shots", 0),
@@ -770,6 +761,10 @@ if __name__ == "__main__":
 
     # Create different QNN models
     models = {
+        "GlobalQNNClassicalToQuantum": GlobalQNNClassicalToQuantum(config_dict={"n_qubits": 6}),
+        "GlobalQNNReverse": GlobalQNNReverse(
+            config_dict={"n_qubits": 6},
+        ),
         "DirectQNN": LocalQNN(config_dict={"qnn_type": "LocalQNN", "layer_type": "DirectQNN"}),
         "ChebyshevQNN": LocalQNN(
             config_dict={"qnn_type": "LocalQNN", "layer_type": "ChebyshevQNN"},
@@ -784,7 +779,7 @@ if __name__ == "__main__":
     }
 
     # Setup test data
-    num_points = 9
+    num_points = 14
     density = jnp.linspace(0, 1, num_points)
     print(f"Density shape: {density.shape}")
     grids = jnp.ones(density.shape)
@@ -794,6 +789,7 @@ if __name__ == "__main__":
     # Test each model
     results = {}
     for name, model in models.items():
+        print(f"Building {name}...")
         # Build network
         init_fn, apply_fn = model.build_network(grids)
 
