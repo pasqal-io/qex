@@ -41,9 +41,9 @@ def add_gaussian_noise_layer(network: tuple[Callable, Callable], noise_std: floa
         rng = kwargs.get('rng', jax.random.PRNGKey(0))
         if rng is not None and noise_std > 0:
             noise = jax.random.normal(rng, shape=outputs.shape) * noise_std
-            return outputs + noise
+            return jnp.array(outputs + noise).reshape((-1,))
         # return jnp.array([outputs,])
-        return jnp.array(outputs)
+        return jnp.array(outputs).reshape((-1,))
 
     return init_fn, noisy_apply_fn
 

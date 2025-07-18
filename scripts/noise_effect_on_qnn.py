@@ -21,7 +21,7 @@ from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 
 from qedft.config.config import Config
 from qedft.data_io.dataset_loader import load_molecular_datasets_from_config
-from qedft.models.networks import GlobalQNNClassicalToQuantum
+from qedft.models.networks import GlobalQNNClassicalToQuantum, GlobalQNNQuantumToClassical
 from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
 from qedft.models.wrappers import wrap_network_from_config
 
@@ -126,15 +126,16 @@ def evaluate_with_noise(config_dict, noise_configs):
         model_config = config_dict.copy()
         model_config.update(noise_config)
 
-        # Create GlobalQNNClassicalToQuantum model
-        model = GlobalQNNClassicalToQuantum(model_config)
+        # Create model
+        model = GlobalQNNQuantumToClassical(model_config)
 
         # Build network with noise
         noise_params = create_noise_config(noise_type, noise_level)
         network = model.build_network(grids, noise=noise_params['noise'])
 
+        # Ensure proper output shape through wrapper
         prng = random.PRNGKey(config_dict.get("seed", 42))
-        wrapped_network = wrap_network_from_config(network, grids, config_dict)
+        wrapped_network = wrap_network_from_config(network, grids, model_config)  # Use model_config here
 
         # Test direct initialization networks
         init_fn, neural_xc_energy_density_fn = wrapped_network
@@ -246,20 +247,23 @@ def plot_results(results):
 
 if __name__ == "__main__":
     # Load configuration
-    config = Config(config_path=project_path / "qedft" / "config" / "train_config.yaml")
+    config = Config(config_path=project_path / "qedft" / "config" / "train_config_global.yaml")
     config_dict = config.config
 
-    # Set model type to GlobalQNNClassicalToQuantum
+    # Update config with proper parameters for output shape
     config_dict.update(
         {
-            "network_type": "GlobalQNNClassicalToQuantum",
+            "network_type": "mlp_ksr",
             "n_qubits": 4,
             "n_var_layers": 2,
+            "n_features": 3,  # Match n_qubits
+            "largest_kernel_width": 2**4,  # Match n_qubits
+            "max_number_conv_layers": 1,
             "normalization": 1.0,
             "use_bias_mlp": False,
-            "diff_mode": "AD",
+            "diff_mode": "ad",
             "n_shots": 0,
-            "maxiter": 1000,  # Reduced for faster testing
+            "maxiter": 1000,
             "maxfun": 1000,
             "save_every_n": 50,
         },
