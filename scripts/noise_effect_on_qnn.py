@@ -127,7 +127,13 @@ def evaluate_with_noise(config_dict, noise_configs):
         model_config.update(noise_config)
 
         # Create model
-        model = GlobalQNNQuantumToClassical(model_config)
+        classical_to_quantum = model_config.get("classical_to_quantum", True)
+        if classical_to_quantum is False:
+            print("Using GlobalQNNQuantumToClassical model")
+            model = GlobalQNNQuantumToClassical(model_config)
+        else:
+            print("Using GlobalQNNClassicalToQuantum model")
+            model = GlobalQNNClassicalToQuantum(model_config)
 
         # Build network with noise
         noise_params = create_noise_config(noise_type, noise_level)
@@ -254,8 +260,8 @@ if __name__ == "__main__":
     config_dict.update(
         {
             "network_type": "mlp_ksr",
-            "n_qubits": 4,
-            "n_var_layers": 2,
+            "n_qubits": 6,
+            "n_var_layers": 4,
             "n_features": 3,  # Match n_qubits
             "largest_kernel_width": 2**4,  # Match n_qubits
             "max_number_conv_layers": 1,
