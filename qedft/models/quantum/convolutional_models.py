@@ -830,6 +830,7 @@ def build_conv_qnn_quantum_to_classical(
     key: jax.random.PRNGKey = jax.random.PRNGKey(0),
     add_gaussian_noise_to_qnn_output: bool = False,
     gaussian_noise_std: float = 0.5,
+    n_features: int = 3,
 ) -> tuple[Callable, Callable]:
     """Build a convolutional quantum neural network.
 
@@ -857,6 +858,7 @@ def build_conv_qnn_quantum_to_classical(
         use_amplitude_encoding=False,  # NOTE: always use angle encoding
         add_gaussian_noise_to_qnn_output=add_gaussian_noise_to_qnn_output,
         gaussian_noise_std=gaussian_noise_std,
+        n_features=n_features,
     )
     network = stax.serial(*list_conv_layers)
     init_fn, apply_fn = network
