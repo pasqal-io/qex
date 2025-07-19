@@ -8,9 +8,9 @@ on the training loss of a GlobalQNNClassicalToQuantum model.
 """
 
 import os
-import time
 from pathlib import Path
 
+import qedft
 import jax
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,9 +29,6 @@ from qedft.models.wrappers import wrap_network_from_config
 config.update("jax_enable_x64", True)
 # set gpu device
 config.update("jax_platform_name", "cpu")  # "cuda" or "cpu"
-
-# Get the project path
-import qedft
 
 # Get the project path
 project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
