@@ -1,5 +1,6 @@
 # Exclude vscode config files
 .vscode/
+.*
 
 # Exclude .DS_Store files from being added
 .DS_Store
