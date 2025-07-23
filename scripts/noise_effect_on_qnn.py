@@ -9,6 +9,7 @@ on the training loss of a GlobalQNNClassicalToQuantum model.
 
 import os
 from pathlib import Path
+from datetime import datetime
 
 import qedft
 import jax
@@ -35,7 +36,7 @@ from qedft.models.wrappers import wrap_network_from_config
 # Set the default dtype as float64
 config.update("jax_enable_x64", True)
 # set gpu device
-config.update("jax_platform_name", "cpu")  # "cuda" or "cpu"
+config.update("jax_platform_name", "cuda")  # "cuda" or "cpu"
 
 # Get the project path
 project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
@@ -141,7 +142,7 @@ def create_realistic_noise_config(
 
 
 def evaluate_with_noise(
-    config_dict, noise_scales=[0.0, 0.1, 0.5, 1.0, 2.0, 5.0]
+    config_dict, noise_scales=[0.0, 0.1, 0.5, 1.0, 2.0, 5.0], results_dir=None
 ):
     """
     Evaluates model performance with different noise scale factors.
@@ -149,6 +150,7 @@ def evaluate_with_noise(
     Args:
         config_dict: Configuration dictionary
         noise_scales: List of noise scale factors to test
+        results_dir: Directory to save checkpoints and results
 
     Returns:
         Dictionary of results for each noise scale
@@ -266,7 +268,10 @@ def evaluate_with_noise(
             device_noise_str = (
                 f"{device_type}_scale_{noise_scale:.6f}".replace(".", "p")
             )
-            checkpoint_dir = project_path / "scripts_ckpts" / device_noise_str
+            if results_dir is not None:
+                checkpoint_dir = results_dir / "checkpoints" / device_noise_str
+            else:
+                checkpoint_dir = project_path / "scripts_ckpts" / device_noise_str
 
             # Create training step
             training_step = create_training_step(
@@ -315,12 +320,13 @@ def evaluate_with_noise(
     return results
 
 
-def plot_results(results):
+def plot_results(results, results_dir):
     """
     Plots the results of noise evaluation.
 
     Args:
         results: Dictionary with noise scales and corresponding losses
+        results_dir: Directory to save the plot
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
@@ -381,12 +387,19 @@ def plot_results(results):
         )
 
     plt.tight_layout()
-    save_path = project_path / "global_qnn_noise_evaluation_results.png"
+    save_path = results_dir / "global_qnn_noise_evaluation_results.png"
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
 
 if __name__ == "__main__":
+    # Create unique results directory with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_dir = project_path / "noise_evaluation_results" / f"run_{timestamp}"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Results will be saved to: {results_dir}")
+
     # Load configuration
     config_path = str(
         project_path / "qedft" / "config" / "train_config_global.yaml"
@@ -427,15 +440,15 @@ if __name__ == "__main__":
             print(f"\n{device_type.capitalize()} device, scale {scale}:")
             print(noise_config)
     # Run evaluation
-    results = evaluate_with_noise(config_dict, noise_scales)
+    results = evaluate_with_noise(config_dict, noise_scales, results_dir)
 
     # Plot results
-    plot_results(results)
+    plot_results(results, results_dir)
 
     # Save results
     import json
 
-    save_path = project_path / "global_qnn_noise_evaluation_results.json"
+    save_path = results_dir / "global_qnn_noise_evaluation_results.json"
     with open(save_path, "w") as f:
         # Convert numpy values to Python native types for JSON serialization
         serializable_results = {
@@ -458,5 +471,5 @@ if __name__ == "__main__":
         json.dump(serializable_results, f, indent=2)
 
     print("\nResults saved to:")
-    print(f"- {project_path / 'global_qnn_noise_evaluation_results.json'}")
-    print(f"- {project_path / 'global_qnn_noise_evaluation_results.png'}")
+    print(f"- {results_dir / 'global_qnn_noise_evaluation_results.json'}")
+    print(f"- {results_dir / 'global_qnn_noise_evaluation_results.png'}")
