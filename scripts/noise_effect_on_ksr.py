@@ -27,7 +27,7 @@ from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_tra
 # Set the default dtype as float64
 config.update("jax_enable_x64", True)
 # set gpu device
-config.update("jax_platform_name", "cuda")  # "cuda" or "cpu"
+config.update("jax_platform_name", "cpu")  # "cuda" or "cpu"
 
 # Get the project path
 import qedft
@@ -161,6 +161,10 @@ def evaluate_with_noise(config_dict, noise_levels=[0.0, 0.01, 0.05, 0.1, 0.2, 0.
         loss_fn = create_loss_fn(batch_kohn_sham, grids, dataset, config_dict)
         value_and_grad_fn = jax.jit(jax.value_and_grad(loss_fn))
 
+        # Create checkpoint directory specific to noise level
+        noise_level_str = f"noise_{noise_std:.6f}".replace(".", "p")
+        checkpoint_dir = project_path / "scripts_ckpts" / noise_level_str
+
         # Create training step
         training_step = create_training_step(
             value_and_grad_fn,
@@ -168,7 +172,7 @@ def evaluate_with_noise(config_dict, noise_levels=[0.0, 0.01, 0.05, 0.1, 0.2, 0.
             initial_density,
             save_every_n=config_dict.get("save_every_n", 10),
             initial_checkpoint_index=0,
-            checkpoint_dir=project_path / "scripts_ckpts",
+            checkpoint_dir=str(checkpoint_dir),
             spec=spec,
         )
 
@@ -223,8 +227,7 @@ def plot_results(results):
             markersize=10,
         )
 
-    plt.savefig(project_path / "noise_evaluation_results.png")
-    plt.show()
+    plt.savefig(project_path / "noise_evaluation_results_ksr.png")
 
 
 if __name__ == "__main__":

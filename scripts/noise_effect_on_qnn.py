@@ -21,8 +21,15 @@ from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 
 from qedft.config.config import Config
 from qedft.data_io.dataset_loader import load_molecular_datasets_from_config
-from qedft.models.networks import GlobalQNNClassicalToQuantum, GlobalQNNQuantumToClassical
-from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
+from qedft.models.networks import (
+    GlobalQNNClassicalToQuantum,
+    GlobalQNNQuantumToClassical,
+)
+from qedft.train.od.train import (
+    create_kohn_sham_fn,
+    create_loss_fn,
+    create_training_step,
+)
 from qedft.models.wrappers import wrap_network_from_config
 
 # Set the default dtype as float64
@@ -35,60 +42,114 @@ project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
 print(f"Project path: {project_path}")
 
 
-def create_noise_config(noise_type, noise_level):
+def calculate_noise_probabilities(
+    t1_ns: float, t2_ns: float, gate_time_ns: float, readout_error: float
+):
     """
-    Creates noise configuration for the GlobalQNNClassicalToQuantum model.
+    Calculate realistic noise probabilities from IBM device parameters.
 
     Args:
-        noise_type: Type of noise ('bitflip', 'depolarizing', 'amplitude_damping', 'gaussian', 'none')
-        noise_level: Noise level (probability for quantum noise, std for gaussian)
+        t1_ns: T1 relaxation time in nanoseconds
+        t2_ns: T2 dephasing time in nanoseconds
+        gate_time_ns: Gate execution time in nanoseconds
+        readout_error: Readout error probability
 
     Returns:
-        Dictionary with noise configuration
+        Dictionary with calculated noise probabilities
     """
-    if noise_type == 'none':
-        return {
-            'noise': None,
-            'add_gaussian_noise_to_qnn_output': False,
-            'gaussian_noise_std': 0.0
-        }
-    elif noise_type == 'gaussian':
-        return {
-            'noise': None,
-            'add_gaussian_noise_to_qnn_output': True,
-            'gaussian_noise_std': noise_level
-        }
-    else:
-        # Map noise type to DigitalNoiseType and add gaussian noise to QNN output
-        noise_type_map = {
-            'bitflip': DigitalNoiseType.BITFLIP,
-            'depolarizing': DigitalNoiseType.DEPOLARIZING,
-            'amplitude_damping': DigitalNoiseType.AMPLITUDE_DAMPING,
-            'phase_flip': DigitalNoiseType.PHASEFLIP,
-            'phase_damping': DigitalNoiseType.PHASE_DAMPING,
-        }
+    # Calculate amplitude damping probability: P = 1 - exp(-t_gate/T1)
+    amplitude_damping_prob = 1.0 - np.exp(-gate_time_ns / t1_ns)
 
-        if noise_type not in noise_type_map:
-            raise ValueError(f"Unknown noise type: {noise_type}")
+    # Calculate phase damping probability: P = 1 - exp(-t_gate/T2)
+    phase_damping_prob = 1.0 - np.exp(-gate_time_ns / t2_ns)
 
-        digital_noise = DigitalNoiseInstance(noise_type_map[noise_type], noise_level)
-        return {
-            'noise': (digital_noise,),
-            'add_gaussian_noise_to_qnn_output': True,
-            'gaussian_noise_std': 0.0
-        }
+    # Print summary of noise probabilities
+    print("=== Realistic IBM Device Noise Parameters ===")
+    print(f"T1: {t1_ns} ns, T2: {t2_ns} ns, Gate time: {gate_time_ns} ns")
+    print(f"Amplitude damping probability: {amplitude_damping_prob}")
+    print(f"Phase damping probability: {phase_damping_prob}")
+    print(f"Readout error: {readout_error}")
+    print("===========================================")
+
+    return {
+        "amplitude_damping": amplitude_damping_prob,
+        "phase_damping": phase_damping_prob,
+        "readout_error": readout_error,
+    }
 
 
-def evaluate_with_noise(config_dict, noise_configs):
+def create_realistic_noise_config(
+    noise_scale: float = 1.0, device_type: str = "best"
+):
     """
-    Evaluates model performance with different noise configurations.
+    Creates realistic noise configuration based on IBM device parameters.
+
+    Args:
+        noise_scale: Scale factor to multiply all noise probabilities
+        device_type: 'best' or 'worst' to use best/worst device parameters
+
+    Returns:
+        Tuple of (noise_instances, gaussian_noise_config)
+    """
+    # IBM device parameters from your data
+    device_params = {
+        "best": {
+            "t1_ns": 593.86,
+            "t2_ns": 533.33,
+            "gate_time_ns": 49.78,
+            "readout_error": 0.212158,
+        },
+        "worst": {
+            "t1_ns": 433.44,
+            "t2_ns": 403.38,
+            "gate_time_ns": 60.00,
+            "readout_error": 0.504395,
+        },
+    }
+
+    params = device_params[device_type]
+    noise_probs = calculate_noise_probabilities(**params)
+
+    # Scale noise probabilities
+    scaled_probs = {
+        key: min(prob * noise_scale, 1.0)  # Cap at 1.0
+        for key, prob in noise_probs.items()
+    }
+
+    # Create noise instances for quantum gates
+    quantum_noise = (
+        DigitalNoiseInstance(
+            DigitalNoiseType.AMPLITUDE_DAMPING,
+            scaled_probs["amplitude_damping"]
+        ),
+        DigitalNoiseInstance(
+            DigitalNoiseType.PHASE_DAMPING, scaled_probs["phase_damping"]
+        ),
+    )
+
+    # Add measurement/sampling noise as Gaussian noise
+    # Scale readout error to reasonable Gaussian noise std
+    gaussian_noise_std = scaled_probs["readout_error"] * 0.1
+
+    return {
+        "noise": quantum_noise,
+        "add_gaussian_noise_to_qnn_output": True,
+        "gaussian_noise_std": gaussian_noise_std,
+    }
+
+
+def evaluate_with_noise(
+    config_dict, noise_scales=[0.0, 0.1, 0.5, 1.0, 2.0, 5.0]
+):
+    """
+    Evaluates model performance with different noise scale factors.
 
     Args:
         config_dict: Configuration dictionary
-        noise_configs: List of dictionaries with noise configurations
+        noise_scales: List of noise scale factors to test
 
     Returns:
-        Dictionary of results for each noise configuration
+        Dictionary of results for each noise scale
     """
     # Load dataset
     base_path = project_path / "data" / "od"
@@ -101,100 +162,153 @@ def evaluate_with_noise(config_dict, noise_configs):
     dataset = list_datasets[0][0]  # first dataset
     train_set = list_datasets[0][1]
     grids = dataset.grids
-    initial_density = jax.jit(lambda x: x)(train_set.density)  # Force copy to device
+    # Force copy to device
+    initial_density = jax.jit(lambda x: x)(train_set.density)
 
     # Results dictionary
     results = {
-        "noise_configs": noise_configs,
-        "losses": [],
-        "convergence": [],
-        "noise_types": [],
-        "noise_levels": [],
+        "noise_scales": noise_scales,
+        "losses_best": [],
+        "losses_worst": [],
+        "convergence_best": [],
+        "convergence_worst": [],
     }
 
-    # Test each noise configuration
-    for noise_config in noise_configs:
-        noise_type = noise_config.get('type', 'none')
-        noise_level = noise_config.get('level', 0.0)
-
-        print(f"\n--- Testing noise: {noise_type} with level {noise_level} ---")
-
-        # Create model based on config
-        model_config = config_dict.copy()
-        model_config.update(noise_config)
-
-        # Create model
-        classical_to_quantum = model_config.get("classical_to_quantum", True)
-        if classical_to_quantum is False:
-            print("Using GlobalQNNQuantumToClassical model")
-            model = GlobalQNNQuantumToClassical(model_config)
-        else:
-            print("Using GlobalQNNClassicalToQuantum model")
-            model = GlobalQNNClassicalToQuantum(model_config)
-
-        # Build network with noise
-        noise_params = create_noise_config(noise_type, noise_level)
-        network = model.build_network(grids, noise=noise_params['noise'])
-
-        # Ensure proper output shape through wrapper
-        prng = random.PRNGKey(config_dict.get("seed", 42))
-        wrapped_network = wrap_network_from_config(network, grids, model_config)  # Use model_config here
-
-        # Test direct initialization networks
-        init_fn, neural_xc_energy_density_fn = wrapped_network
-        init_params = init_fn(prng, input_shape=(1,))
-
-        # JIT the neural_xc_energy_density_fn
-        neural_xc_energy_density_fn = jax.jit(neural_xc_energy_density_fn)
-        spec, flatten_init_params = np_utils.flatten(init_params)
-
-        # Create Kohn-Sham function and loss function
-        kohn_sham_fn, batch_kohn_sham = create_kohn_sham_fn(
-            config_dict,
-            dataset,
-            grids,
-            neural_xc_energy_density_fn,
-            spec,
-        )
-
-        loss_fn = create_loss_fn(batch_kohn_sham, grids, dataset, config_dict)
-        value_and_grad_fn = jax.jit(jax.value_and_grad(loss_fn))
-
-        # Create training step
-        training_step = create_training_step(
-            value_and_grad_fn,
-            train_set,
-            initial_density,
-            save_every_n=config_dict.get("save_every_n", 10),
-            initial_checkpoint_index=0,
-            checkpoint_dir=project_path / "scripts_ckpts",
-            spec=spec,
-        )
-
-        # Train with L-BFGS-B
-        try:
-            x, f, info = scipy.optimize.fmin_l_bfgs_b(
-                training_step,
-                x0=np.array(flatten_init_params),
-                maxfun=config_dict.get("maxfun", 5),
-                factr=config_dict.get("factr", 1e12),
-                m=config_dict.get("m", 10),
-                pgtol=config_dict.get("pgtol", 1e-5),
-                maxiter=config_dict.get("maxiter", 5),
+    # Test each noise scale with both best and worst device parameters
+    for noise_scale in noise_scales:
+        for device_type in ["best", "worst"]:
+            print(
+                f"\n--- Testing {device_type} device with "
+                f"noise scale {noise_scale} ---"
             )
 
-            results["losses"].append(f)
-            results["convergence"].append(info["warnflag"] == 0)
-            results["noise_types"].append(noise_type)
-            results["noise_levels"].append(noise_level)
-            print(f"Final loss: {f}, Converged: {info['warnflag'] == 0}")
+            # Create model based on config
+            model_config = config_dict.copy()
 
-        except Exception as e:
-            print(f"Error during training with noise {noise_type} level {noise_level}: {e}")
-            results["losses"].append(float("nan"))
-            results["convergence"].append(False)
-            results["noise_types"].append(noise_type)
-            results["noise_levels"].append(noise_level)
+            # Create model
+            classical_to_quantum = model_config.get(
+                "classical_to_quantum", True
+            )
+            if classical_to_quantum is False:
+                print("Using GlobalQNNQuantumToClassical model")
+                model = GlobalQNNQuantumToClassical(model_config)
+            else:
+                print("Using GlobalQNNClassicalToQuantum model")
+                model = GlobalQNNClassicalToQuantum(model_config)
+
+            # Build network with realistic noise
+            if noise_scale == 0.0:
+                # No noise case
+                noise_config = {
+                    "noise": None,
+                    "add_gaussian_noise_to_qnn_output": False,
+                    "gaussian_noise_std": 0.0,
+                }
+            else:
+                noise_config = create_realistic_noise_config(
+                    noise_scale, device_type
+                )
+
+            network = model.build_network(grids, noise=noise_config["noise"])
+
+            # Ensure proper output shape through wrapper
+            prng = random.PRNGKey(config_dict.get("seed", 42))
+            # Use model_config here
+            wrapped_network = wrap_network_from_config(
+                network, grids, model_config
+            )
+
+            # Test direct initialization networks
+            init_fn, neural_xc_energy_density_fn = wrapped_network
+            init_params = init_fn(prng)  # type: ignore
+
+            # Add Gaussian noise to output if specified
+            if noise_config["add_gaussian_noise_to_qnn_output"]:
+                original_fn = neural_xc_energy_density_fn
+                gaussian_std = noise_config["gaussian_noise_std"]
+
+                def noisy_neural_xc_energy_density_fn(inputs, params):
+                    outputs = original_fn(inputs, params)
+                    # Use a consistent noise key
+                    noise_key = random.PRNGKey(42)
+                    noise = jax.random.normal(
+                        noise_key, shape=outputs.shape
+                    ) * gaussian_std
+                    return outputs + noise
+
+                neural_xc_energy_density_fn = (
+                    noisy_neural_xc_energy_density_fn
+                )
+
+            # JIT the neural_xc_energy_density_fn
+            neural_xc_energy_density_fn = jax.jit(
+                neural_xc_energy_density_fn
+            )
+            spec, flatten_init_params = np_utils.flatten(init_params)
+
+            # Create Kohn-Sham function and loss function
+            kohn_sham_fn, batch_kohn_sham = create_kohn_sham_fn(
+                config_dict,
+                dataset,
+                grids,
+                neural_xc_energy_density_fn,
+                spec,
+            )
+
+            loss_fn = create_loss_fn(
+                batch_kohn_sham, grids, dataset, config_dict
+            )
+            value_and_grad_fn = jax.jit(jax.value_and_grad(loss_fn))
+
+            # Create checkpoint directory specific to device and noise scale
+            device_noise_str = (
+                f"{device_type}_scale_{noise_scale:.6f}".replace(".", "p")
+            )
+            checkpoint_dir = project_path / "scripts_ckpts" / device_noise_str
+
+            # Create training step
+            training_step = create_training_step(
+                value_and_grad_fn,
+                train_set,
+                initial_density,
+                save_every_n=config_dict.get("save_every_n", 10),
+                initial_checkpoint_index=0,
+                checkpoint_dir=str(checkpoint_dir),
+                spec=spec,
+            )
+
+            # Train with L-BFGS-B
+            try:
+                x, f, info = scipy.optimize.fmin_l_bfgs_b(
+                    training_step,
+                    x0=np.array(flatten_init_params),
+                    maxfun=config_dict.get("maxfun", 5),
+                    factr=config_dict.get("factr", 1e12),
+                    m=config_dict.get("m", 10),
+                    pgtol=config_dict.get("pgtol", 1e-5),
+                    maxiter=config_dict.get("maxiter", 5),
+                )
+
+                final_loss = f
+                converged = info["warnflag"] == 0
+                print(f"Final loss: {final_loss}, Converged: {converged}")
+
+            except Exception as e:
+                error_msg = (
+                    f"Error during training with {device_type} device "
+                    f"noise scale {noise_scale}: {e}"
+                )
+                print(error_msg)
+                final_loss = float("nan")
+                converged = False
+
+            # Store results
+            if device_type == "best":
+                results["losses_best"].append(final_loss)
+                results["convergence_best"].append(converged)
+            else:
+                results["losses_worst"].append(final_loss)
+                results["convergence_worst"].append(converged)
 
     return results
 
@@ -204,53 +318,78 @@ def plot_results(results):
     Plots the results of noise evaluation.
 
     Args:
-        results: Dictionary with noise configurations and corresponding losses
+        results: Dictionary with noise scales and corresponding losses
     """
-    # Create subplots for different noise types
-    noise_types = list(set(results["noise_types"]))
-    n_types = len(noise_types)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    fig, axes = plt.subplots(1, n_types, figsize=(5*n_types, 6))
-    if n_types == 1:
-        axes = [axes]
+    noise_scales = results["noise_scales"]
 
-    for i, noise_type in enumerate(noise_types):
-        # Filter results for this noise type
-        mask = [nt == noise_type for nt in results["noise_types"]]
-        levels = [results["noise_levels"][j] for j, m in enumerate(mask) if m]
-        losses = [results["losses"][j] for j, m in enumerate(mask) if m]
-        convergence = [results["convergence"][j] for j, m in enumerate(mask) if m]
+    # Plot for best device
+    ax1.plot(
+        noise_scales,
+        results["losses_best"],
+        "o-",
+        linewidth=2,
+        label="Best Device",
+        color="blue",
+    )
+    ax1.set_xlabel("Noise Scale Factor")
+    ax1.set_ylabel("Final Loss")
+    ax1.set_title("Effect of Noise on Training Loss (Best Device)")
+    ax1.grid(True)
+    ax1.set_yscale("log")
 
-        ax = axes[i]
-        ax.plot(levels, losses, "o-", linewidth=2, label=f"{noise_type} noise")
-        ax.set_xlabel("Noise Level")
-        ax.set_ylabel("Final Loss")
-        ax.set_title(f"Effect of {noise_type.capitalize()} Noise on Training Loss")
-        ax.grid(True)
-        ax.set_yscale("log")
+    # Add convergence indicators for best device
+    for i, converged in enumerate(results["convergence_best"]):
+        color = "green" if converged else "red"
+        marker = "o" if converged else "x"
+        ax1.plot(
+            noise_scales[i],
+            results["losses_best"][i],
+            marker,
+            color=color,
+            markersize=10,
+        )
 
-        # Add convergence indicators
-        for j, converged in enumerate(convergence):
-            color = "green" if converged else "red"
-            marker = "o" if converged else "x"
-            ax.plot(
-                levels[j],
-                losses[j],
-                marker,
-                color=color,
-                markersize=10,
-            )
+    # Plot for worst device
+    ax2.plot(
+        noise_scales,
+        results["losses_worst"],
+        "o-",
+        linewidth=2,
+        label="Worst Device",
+        color="red",
+    )
+    ax2.set_xlabel("Noise Scale Factor")
+    ax2.set_ylabel("Final Loss")
+    ax2.set_title("Effect of Noise on Training Loss (Worst Device)")
+    ax2.grid(True)
+    ax2.set_yscale("log")
 
-        ax.legend()
+    # Add convergence indicators for worst device
+    for i, converged in enumerate(results["convergence_worst"]):
+        color = "green" if converged else "red"
+        marker = "o" if converged else "x"
+        ax2.plot(
+            noise_scales[i],
+            results["losses_worst"][i],
+            marker,
+            color=color,
+            markersize=10,
+        )
 
     plt.tight_layout()
-    plt.savefig(project_path / "global_qnn_noise_evaluation_results.png", dpi=300, bbox_inches='tight')
+    save_path = project_path / "global_qnn_noise_evaluation_results.png"
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
 
 if __name__ == "__main__":
     # Load configuration
-    config = Config(config_path=project_path / "qedft" / "config" / "train_config_global.yaml")
+    config_path = str(
+        project_path / "qedft" / "config" / "train_config_global.yaml"
+    )
+    config = Config(config_path=config_path)
     config_dict = config.config
 
     # Update config with proper parameters for output shape
@@ -272,33 +411,26 @@ if __name__ == "__main__":
         },
     )
 
-    # Define noise configurations to test
-    noise_configs = [
-        # No noise baseline
-        {"type": "none", "level": 0.0},
+    # Define noise scale factors to test (similar to noise_effect_on_ksr.py)
+    noise_scales = [0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
 
-        # Gaussian noise on QNN output
-        {"type": "gaussian", "level": 0.001},
-        {"type": "gaussian", "level": 0.01},
-        {"type": "gaussian", "level": 0.1},
-        {"type": "gaussian", "level": 1.0},
-
-        # Quantum noise on gates
-        {"type": "bitflip", "level": 0.001},
-        {"type": "bitflip", "level": 0.01},
-        {"type": "bitflip", "level": 0.1},
-
-        {"type": "depolarizing", "level": 0.001},
-        {"type": "depolarizing", "level": 0.01},
-        {"type": "depolarizing", "level": 0.1},
-
-        {"type": "amplitude_damping", "level": 0.001},
-        {"type": "amplitude_damping", "level": 0.01},
-        {"type": "amplitude_damping", "level": 0.1},
-    ]
+    # Print realistic noise parameters for reference
+    print("=== Realistic IBM Device Noise Parameters ===")
+    # for device_type in ["best", "worst"]:
+    for device_type in ["best"]:
+        for scale in [1.0, 2.0, 5.0]:
+            noise_config = create_realistic_noise_config(scale, device_type)
+            print(f"\n{device_type.capitalize()} device, scale {scale}:")
+            print(noise_config)
+            # for noise_inst in noise_config["noise"]:
+                # noise_name = noise_inst.noise_type.name
+                # error_prob = noise_inst.error_prob
+                # print(f"  {noise_name}: {error_prob:.6f}")
+            # gaussian_std = noise_config['gaussian_noise_std']
+            # print(f"  Gaussian std: {gaussian_std:.6f}")
 
     # Run evaluation
-    results = evaluate_with_noise(config_dict, noise_configs)
+    results = evaluate_with_noise(config_dict, noise_scales)
 
     # Plot results
     plot_results(results)
@@ -306,13 +438,25 @@ if __name__ == "__main__":
     # Save results
     import json
 
-    with open(project_path / "global_qnn_noise_evaluation_results.json", "w") as f:
+    save_path = project_path / "global_qnn_noise_evaluation_results.json"
+    with open(save_path, "w") as f:
         # Convert numpy values to Python native types for JSON serialization
         serializable_results = {
-            "noise_types": results["noise_types"],
-            "noise_levels": [float(x) for x in results["noise_levels"]],
-            "losses": [float(x) if not np.isnan(x) else None for x in results["losses"]],
-            "convergence": [bool(x) for x in results["convergence"]],
+            "noise_scales": [float(x) for x in results["noise_scales"]],
+            "losses_best": [
+                float(x) if not np.isnan(x) else None
+                for x in results["losses_best"]
+            ],
+            "losses_worst": [
+                float(x) if not np.isnan(x) else None
+                for x in results["losses_worst"]
+            ],
+            "convergence_best": [
+                bool(x) for x in results["convergence_best"]
+            ],
+            "convergence_worst": [
+                bool(x) for x in results["convergence_worst"]
+            ],
         }
         json.dump(serializable_results, f, indent=2)
 
