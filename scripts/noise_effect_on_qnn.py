@@ -64,12 +64,12 @@ def calculate_noise_probabilities(
     phase_damping_prob = 1.0 - np.exp(-gate_time_ns / t2_ns)
 
     # Print summary of noise probabilities
-    print("=== Realistic IBM Device Noise Parameters ===")
+    print("\n===========================================")
+    print("Summary of noise probabilities:")
     print(f"T1: {t1_ns} ns, T2: {t2_ns} ns, Gate time: {gate_time_ns} ns")
     print(f"Amplitude damping probability: {amplitude_damping_prob}")
     print(f"Phase damping probability: {phase_damping_prob}")
     print(f"Readout error: {readout_error}")
-    print("===========================================")
 
     return {
         "amplitude_damping": amplitude_damping_prob,
@@ -115,6 +115,8 @@ def create_realistic_noise_config(
         key: min(prob * noise_scale, 1.0)  # Cap at 1.0
         for key, prob in noise_probs.items()
     }
+
+    print(f"Scaled noise probabilities: {scaled_probs}")
 
     # Create noise instances for quantum gates
     quantum_noise = (
@@ -413,22 +415,17 @@ if __name__ == "__main__":
 
     # Define noise scale factors to test (similar to noise_effect_on_ksr.py)
     noise_scales = [0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+    # similar scaling to noise_effect_on_ksr.py
+    # noise_scales = [0.0, 0.001, 0.01, 0.1, 1.0, 10.0]
 
     # Print realistic noise parameters for reference
     print("=== Realistic IBM Device Noise Parameters ===")
     # for device_type in ["best", "worst"]:
     for device_type in ["best"]:
-        for scale in [1.0, 2.0, 5.0]:
+        for scale in noise_scales:
             noise_config = create_realistic_noise_config(scale, device_type)
             print(f"\n{device_type.capitalize()} device, scale {scale}:")
             print(noise_config)
-            # for noise_inst in noise_config["noise"]:
-                # noise_name = noise_inst.noise_type.name
-                # error_prob = noise_inst.error_prob
-                # print(f"  {noise_name}: {error_prob:.6f}")
-            # gaussian_std = noise_config['gaussian_noise_std']
-            # print(f"  Gaussian std: {gaussian_std:.6f}")
-
     # Run evaluation
     results = evaluate_with_noise(config_dict, noise_scales)
 
