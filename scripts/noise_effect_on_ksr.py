@@ -27,7 +27,7 @@ from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_tra
 # Set the default dtype as float64
 config.update("jax_enable_x64", True)
 # set gpu device
-config.update("jax_platform_name", "cpu")  # "cuda" or "cpu"
+config.update("jax_platform_name", "cuda")  # "cuda" or "cpu"
 
 # Get the project path
 import qedft
