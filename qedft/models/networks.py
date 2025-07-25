@@ -254,7 +254,7 @@ class GlobalQNNLayer(KohnShamNetwork):
             n_features=self.config.get("n_features", 1),
             ansatz=self.config.get(
                 "ansatz",
-                hea(self.config.get("n_qubits", 2), self.config.get("n_layers", 2)),
+                hea(self.config.get("n_qubits", 2), self.config.get("n_var_layers", 2)),
             ),
             state=self.config.get("state", zero_state(self.config.get("n_qubits", 2))),
             qnn_type=self.config.get("qnn_type", "GlobalQNN"),
@@ -333,6 +333,7 @@ class GlobalQNN(KohnShamNetwork):
             "use_amplitude_encoding": True,  # This model uses global encoding
             "n_qubits": 4,
             "n_var_layers": 2,
+            "n_layers": 2,
             "largest_kernel_width": 4,
             "max_number_conv_layers": 100,
             "list_qubits_per_layer": [],
