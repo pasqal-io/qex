@@ -25,6 +25,7 @@ from horqrux.utils.operator_utils import TargetQubits
 from horqrux.primitives.primitive import Primitive
 import time
 import numpy as np
+from qedft.models.quantum.entangling_layers import entangling_ops
 
 
 def create_feature_map_gates(x: Array, n_qubits: int, feature_type: str = "direct", noise: NoiseProtocol | None = None) -> list[Primitive]:
@@ -92,7 +93,7 @@ def create_ansatz_gates(n_qubits: int, n_layers: int, noise: NoiseProtocol | Non
     else:
         rz = RZ
         rx = RX
-        not_gate = NOT
+        # not_gate = NOT
 
     for layer in range(n_layers):
         # Rotation gates for each qubit (RY, RX, RY pattern)
@@ -106,9 +107,12 @@ def create_ansatz_gates(n_qubits: int, n_layers: int, noise: NoiseProtocol | Non
             gates.append(rz(rz2_param, (i,)))
             param_names.extend([rz1_param, rx_param, rz2_param])
 
+        # Alternate linear entangling gates
+        gates.extend(entangling_ops(n_qubits, entangling_block_type="alternate_linear", noise=noise))
+
         # Entangling gates (circular CNOTs)
-        for i in range(n_qubits):
-            gates.append(not_gate((i + 1) % n_qubits, i))
+        # for i in range(n_qubits):
+        #     gates.append(not_gate((i + 1) % n_qubits, i))
 
     return gates, param_names
 
@@ -471,6 +475,15 @@ if __name__ == "__main__":
     result_noisy = apply_fn_noisy(params, x)
     print(f"Noisy result (scalar): {result_noisy}")
     print(f"Noisy result shape: {result_noisy.shape}")
+
+    # Use the wrap function to make neural XC functional
+    print("=== Testing Neural XC Functional ===")
+    from qedft.models.wrappers import wrap_network
+    init_fn_neural_xc, apply_fn_neural_xc = wrap_network((init_fn, apply_fn), x, "mlp_ksr", wrap_self_interaction=False, wrap_with_negative_transform=False)
+    params_neural_xc = init_fn_neural_xc(key)
+    result_neural_xc = apply_fn_neural_xc(x, params_neural_xc)
+    print(f"Neural XC result (scalar): {result_neural_xc}")
+    print(f"Neural XC result shape: {result_neural_xc.shape}")
 
     # Test JIT compilation
     jitted_apply = jax.jit(apply_fn)
