@@ -180,7 +180,7 @@ class BatchedGlobalMLP(KohnShamNetwork):
 class LocalQNN(KohnShamNetwork):
     """Basic QNN with angle encoding."""
 
-    def __init__(self, config_dict: dict | None = None):
+    def __init__(self, config_dict: dict | None = None, noise: NoiseProtocol | None = None):
         """Initialize from config dictionary."""
         super().__init__(config_dict)
         self.config = {
@@ -195,12 +195,19 @@ class LocalQNN(KohnShamNetwork):
         if config_dict is not None:
             self.config.update(config_dict)
 
+        self.noise = noise
+
     def build_network(
         self,
         grids: jnp.ndarray,
         noise: NoiseProtocol | None = None,
     ) -> tuple[Callable, Callable]:
         from qedft.models.quantum.quantum_models import build_qnn
+
+        if self.noise is None:
+            self.noise = noise
+
+        logger.info(f"Using noise: {self.noise}")
 
         return build_qnn(
             n_qubits=self.config.get("n_qubits", 2),
@@ -214,7 +221,7 @@ class LocalQNN(KohnShamNetwork):
             map_fn=self.config.get("map_fn", None),
             grids=grids,
             n_features=self.config.get("n_features", 1),
-            noise=noise,
+            noise=self.noise,
             diff_mode=self.config.get("diff_mode", DiffMode.AD),
             n_shots=self.config.get("n_shots", 0),
             key=self.config.get("key", jax.random.PRNGKey(0)),
@@ -323,7 +330,7 @@ class GlobalQNN(KohnShamNetwork):
     kernel widths determined by the input dimension.
     """
 
-    def __init__(self, config_dict: dict | None = None):
+    def __init__(self, config_dict: dict | None = None, noise: NoiseProtocol | None = None):
         """Initialize from config dictionary."""
         super().__init__(config_dict)
         self.config = {
@@ -342,9 +349,13 @@ class GlobalQNN(KohnShamNetwork):
             "last_layer_type": "dense",  # "dense" or "mlp"
             "use_bias_mlp": False,
             "last_layer_features": [1],
+            "add_gaussian_noise_to_qnn_output": False,
+            "gaussian_noise_std": 0.001,
         }
         if config_dict is not None:
             self.config.update(config_dict)
+
+        self.noise = noise
 
     def build_network(
         self,
@@ -364,6 +375,10 @@ class GlobalQNN(KohnShamNetwork):
         # Get the input dimension from the grid size
         input_dimension = grids.shape[0]
 
+        if self.noise is None:
+            self.noise = noise
+            logger.info(f"Using noise: {self.noise}")
+
         # Construct the full convolutional model
         network = build_conv_qnn(
             n_qubits=self.config.get("n_qubits", 4),
@@ -371,7 +386,7 @@ class GlobalQNN(KohnShamNetwork):
             n_out=1,  # Always output a single value per point
             input_dimension=input_dimension,
             largest_kernel_width=self.config.get("largest_kernel_width", 4),
-            max_number_conv_layers=self.config.get("max_number_conv_layers", 100),
+            max_number_conv_layers=1, # TODO: self.config.get("max_number_conv_layers", 100),
             list_qubits_per_layer=self.config.get("list_qubits_per_layer", []),
             force_qubits_per_layer_is_kernel_width=self.config.get(
                 "force_qubits_per_layer_is_kernel_width",
@@ -381,10 +396,12 @@ class GlobalQNN(KohnShamNetwork):
             last_layer_type=self.config.get("last_layer_type", "dense"),
             use_bias_mlp=self.config.get("use_bias_mlp", False),
             last_layer_features=self.config.get("last_layer_features", [1]),
-            noise=noise,
+            noise=self.noise,
             diff_mode=self.config.get("diff_mode", DiffMode.AD),
             n_shots=self.config.get("n_shots", 0),
             key=self.config.get("key", jax.random.PRNGKey(0)),
+            add_gaussian_noise_to_qnn_output=self.config.get("add_gaussian_noise_to_qnn_output", False),
+            gaussian_noise_std=self.config.get("gaussian_noise_std", 0.001),
         )
 
         # Build the full network with the convolutional layers
@@ -481,7 +498,7 @@ class GlobalQNNClassicalToQuantum(KohnShamNetwork):
     kernel widths determined by the input dimension.
     """
 
-    def __init__(self, config_dict: dict | None = None):
+    def __init__(self, config_dict: dict | None = None, noise = None):
         """Initialize from config dictionary."""
         super().__init__(config_dict)
         self.config = {
@@ -503,6 +520,8 @@ class GlobalQNNClassicalToQuantum(KohnShamNetwork):
         if config_dict is not None:
             self.config.update(config_dict)
 
+        self.noise = noise
+
     def build_network(
         self,
         grids: jnp.ndarray,
@@ -521,6 +540,10 @@ class GlobalQNNClassicalToQuantum(KohnShamNetwork):
         # Get the input dimension from the grid size
         input_dimension = grids.shape[0]
 
+        if self.noise is None:
+            self.noise = noise
+            print(f"Using noise: {self.noise}")
+
         # Construct the full convolutional model
         network = build_conv_qnn_classical_to_quantum(
             n_qubits=self.config.get("n_qubits", 4),
@@ -529,7 +552,7 @@ class GlobalQNNClassicalToQuantum(KohnShamNetwork):
             input_dimension=input_dimension,
             normalization=self.config.get("normalization", 1.0),
             use_bias_mlp=self.config.get("use_bias_mlp", False),
-            noise=noise,
+            noise=self.noise,
             diff_mode=self.config.get("diff_mode", DiffMode.AD),
             n_shots=self.config.get("n_shots", 0),
             key=self.config.get("key", jax.random.PRNGKey(0)),

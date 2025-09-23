@@ -228,6 +228,23 @@ def construct_convolutional_model(
             if i <= len(list_kernel_dimensions) - 2:
                 # Get init_fn and apply_fn from build_network
                 init_fn, apply_fn = qnn.build_network(grids, noise=noise)
+
+                def apply_fn_noisy(params, inputs, rng_key=None, **kwargs):
+                    output = apply_fn(params, inputs, **kwargs)
+                    rng_key = kwargs.get('rng', jax.random.PRNGKey(0))
+                    rng1, rng2 = jax.random.split(rng_key)
+                    if add_gaussian_noise_to_qnn_output:
+                        if gaussian_noise_std > 0:
+                            noise = jax.random.normal(rng1, shape=output.shape) * gaussian_noise_std
+                            output = output + noise
+                    return output
+
+                # Add gaussian noise to the output of QNN in addition to the gate noise
+                if add_gaussian_noise_to_qnn_output:
+                    logger.info(f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}")
+                    apply_fn = apply_fn_noisy
+
+
                 list_conv_layers.append((init_fn, apply_fn))
             else:
                 # For the last layer, we might want different configuration
@@ -235,6 +252,23 @@ def construct_convolutional_model(
                 qnn_config["n_features"] = kernel_width
                 qnn = QNNLayer(config_dict=qnn_config)
                 init_fn, apply_fn = qnn.build_network(grids, noise=noise)
+
+                # Add gaussian noise to the output of QNN in addition to the gate noise
+                def apply_fn_noisy(params, inputs, rng_key=None, **kwargs):
+                    output = apply_fn(params, inputs, **kwargs)
+                    rng_key = kwargs.get('rng', jax.random.PRNGKey(0))
+                    rng1, rng2 = jax.random.split(rng_key)
+                    if add_gaussian_noise_to_qnn_output:
+                        if gaussian_noise_std > 0:
+                            noise = jax.random.normal(rng1, shape=output.shape) * gaussian_noise_std
+                            output = output + noise
+                    return output
+
+                # Add gaussian noise to the output of QNN in addition to the gate noise
+                if add_gaussian_noise_to_qnn_output:
+                    logger.info(f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}")
+                    apply_fn = apply_fn_noisy
+
                 list_conv_layers.append((init_fn, apply_fn))
         else:
             # BatchedGlobalMLP if you want to replace by a simple MLP
@@ -254,8 +288,20 @@ def construct_convolutional_model(
             init_fn, apply_fn = bmlp.build_network(grids)
 
             # Add gaussian noise to the output of QNN in addition to the gate noise
+            def apply_fn_noisy(params, inputs, rng_key=None, **kwargs):
+                output = apply_fn(params, inputs, **kwargs)
+                rng_key = kwargs.get('rng', jax.random.PRNGKey(0))
+                rng1, rng2 = jax.random.split(rng_key)
+                if add_gaussian_noise_to_qnn_output:
+                    if gaussian_noise_std > 0:
+                        noise = jax.random.normal(rng1, shape=output.shape) * gaussian_noise_std
+                        output = output + noise
+                return output
+
+            # Add gaussian noise to the output of QNN in addition to the gate noise
             if add_gaussian_noise_to_qnn_output:
-                init_fn, apply_fn = add_gaussian_noise_layer((init_fn, apply_fn), gaussian_noise_std)
+                logger.info(f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}")
+                apply_fn = apply_fn_noisy
 
             list_conv_layers.append((init_fn, apply_fn))
 

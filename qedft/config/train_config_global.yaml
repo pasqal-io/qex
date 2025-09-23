@@ -1,7 +1,7 @@
 # General experiment settings
 name: test
 experiment_name: test
-network_type: mlp_ksr                         # mlp, dqc, adqc, gadqc, ksr, mlp_ksr, conv_dqc, dqc_tfm, gadqc_with_mlp
+network_type: conv_dqc                        # mlp, dqc, adqc, gadqc, ksr, mlp_ksr, conv_dqc, dqc_tfm, gadqc_with_mlp
 molecule_name: h2
 molecule_names: [h2]               # h2, h2_h2, h4, h2_plus allowed
 dataset1: [128, 384]                       # Dataset dimensions
@@ -39,8 +39,8 @@ max_train_steps: 10000                    # Maximum number of training steps
 factr: 1.0                                # L-BFGS convergence factor
 pgtol: 1.0e-14                            # L-BFGS gradient tolerance
 m: 20                                     # L-BFGS memory parameter
-maxfun: 20                                # Maximum number of function evaluations
-maxiter: 2                                    # L-BFGS memory parameter
+maxfun: 10000                             # Maximum number of function evaluations
+maxiter: 10000                            # L-BFGS memory parameter
 
 # DFT parameters
 num_iterations: 15                        # Number of SCF iterations

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Load the data from the JSON file
-with open("/home/isokolov/qex/scripts/noise_evaluation_results.json") as f:
+with open("/home/isokolov/qex/scripts/noise_evaluation_results_ksr3.json") as f:
     data = json.load(f)
 
 # Extract the data
@@ -69,8 +69,8 @@ legend_elements = []
 # Add fit through last 2 data points
 if len(noise_levels) >= 2:
     # Get the last two points
-    x_fit = noise_levels[-3:]
-    y_fit = losses[-3:]
+    x_fit = noise_levels[-5:]
+    y_fit = losses[-5:]
 
     # Calculate slope and intercept in log space (for power law fit)
     log_x = np.log10(x_fit)
@@ -111,5 +111,5 @@ plt.legend(handles=legend_elements, loc="best")
 
 # Show the plot
 plt.tight_layout()
-plt.savefig("./qex/scripts/noise_evaluation_plot.png", dpi=300)
+plt.savefig("./qex/scripts/noise_evaluation_plot_ksr3.png", dpi=300)
 plt.show()

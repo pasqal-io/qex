@@ -26,8 +26,15 @@ from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_tra
 
 # Set the default dtype as float64
 config.update("jax_enable_x64", True)
-# set gpu device
-config.update("jax_platform_name", "cpu")  # "cuda" or "cpu"
+
+# Set the JAX platform name to cuda or cpu
+try:
+    config.update("jax_platform_name", "cuda")  # "cuda" or "cpu"
+    print("Using GPU")
+except Exception as e:
+    print(f"Error updating JAX platform name: {e}, falling back to cpu")
+    config.update("jax_platform_name", "cpu")  # "cuda" or "cpu"
+    print("Using CPU")
 
 # Get the project path
 import qedft
@@ -239,14 +246,16 @@ if __name__ == "__main__":
     config_dict.update(
         {
             "network_type": "ksr",  # Options: 'ksr', 'mlp_local', 'mlp_global'
-            "maxiter": 1000,  # Reduced for faster testing
-            "maxfun": 1000,
-            "save_every_n": 50,
+            "maxiter": 2000,  # Reduced for faster testing
+            "maxfun": 2000,
+            "save_every_n": 100,
+            "rng": 44,
         },
     )
 
     # Define noise levels to test
     noise_levels = [0.0, 0.001, 0.01, 0.1, 1.0, 10.0]
+    # noise_levels = [0.0, 0.001, 0.01, 0.1, 1.0, 2.0, 4.0, 8.0, 10.0]
 
     # Run evaluation
     results = evaluate_with_noise(config_dict, noise_levels)
@@ -257,7 +266,7 @@ if __name__ == "__main__":
     # Save results
     import json
 
-    with open(project_path / "noise_evaluation_results.json", "w") as f:
+    with open(project_path / f"noise_evaluation_results_seed{config_dict['rng']}.json", "w") as f:
         # Convert numpy values to Python native types for JSON serialization
         serializable_results = {
             "noise_levels": [float(x) for x in results["noise_levels"]],

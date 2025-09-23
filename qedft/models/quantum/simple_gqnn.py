@@ -27,6 +27,12 @@ import time
 import numpy as np
 from qedft.models.quantum.entangling_layers import entangling_ops
 
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cuda")  # "cuda" or "cpu"
+
+# Add gradient checkpointing import
+from jax import checkpoint
+
 
 def create_feature_map_gates(x: Array, n_qubits: int, feature_type: str = "direct", noise: NoiseProtocol | None = None) -> list[Primitive]:
     """Create feature map gates for encoding classical data.
@@ -164,6 +170,81 @@ def simple_qnn_core(params: Array, x: Array, n_qubits: int, n_layers: int, featu
     expectations = expectation(state, circuit, measurement_ops, param_dict)
 
     return jnp.sum(expectations)
+
+
+def simple_qnn_core_checkpointed(params: Array, x: Array, n_qubits: int, n_layers: int, feature_type: str, noise: NoiseProtocol | None = None) -> Array:
+    """Core QNN function with gradient checkpointing for memory efficiency.
+
+    This version applies checkpointing to individual layers rather than using scan.
+    """
+    # Create feature map gates and measurement ops
+    feature_gates = create_feature_map_gates(x, n_qubits, feature_type, noise)
+    ansatz_gates, param_names = create_ansatz_gates(n_qubits, n_layers, noise)
+    measurement_ops = create_measurement_ops(n_qubits)
+
+    # Combine all gates
+    all_gates = feature_gates + ansatz_gates
+
+    # Create parameter dictionary
+    param_dict = {name: val for name, val in zip(param_names, params)}
+
+    # Apply checkpointing to the circuit evaluation
+    @checkpoint
+    def compute_circuit():
+        circuit = QuantumCircuit(n_qubits=n_qubits, operations=all_gates)
+        state = zero_state(n_qubits)
+        expectations = expectation(state, circuit, measurement_ops, param_dict)
+        return jnp.sum(expectations)
+
+    return compute_circuit()
+
+
+@partial(jax.jit, static_argnums=(2, 3, 4))  # JIT with static arguments
+def simple_qnn_core_optimized(params: Array, x: Array, n_qubits: int, n_layers: int, feature_type: str, noise: NoiseProtocol | None = None) -> Array:
+    """Optimized core QNN function with static compilation."""
+    # Pre-compile gate structure (this will be cached)
+    feature_gates = create_feature_map_gates(x, n_qubits, feature_type, noise)
+    ansatz_gates, param_names = create_ansatz_gates(n_qubits, n_layers, noise)
+    measurement_ops = create_measurement_ops(n_qubits)
+
+    # Combine all gates
+    all_gates = feature_gates + ansatz_gates
+
+    # Create parameter dictionary efficiently
+    param_dict = dict(zip(param_names, params))
+
+    # Create circuit once
+    circuit = QuantumCircuit(n_qubits=n_qubits, operations=all_gates)
+
+    # Initial state
+    state = zero_state(n_qubits)
+
+    # Compute expectation values
+    expectations = expectation(state, circuit, measurement_ops, param_dict)
+
+    return jnp.sum(expectations)
+
+# Cache compiled circuits to avoid recompilation
+_circuit_cache = {}
+
+def get_cached_circuit(n_qubits: int, n_layers: int, feature_type: str, noise: NoiseProtocol | None = None):
+    """Get or create a cached circuit structure."""
+    cache_key = (n_qubits, n_layers, feature_type, noise)
+
+    if cache_key not in _circuit_cache:
+        # Create a dummy input to get gate structure
+        dummy_x = jnp.zeros(n_qubits)
+        feature_gates = create_feature_map_gates(dummy_x, n_qubits, feature_type, noise)
+        ansatz_gates, param_names = create_ansatz_gates(n_qubits, n_layers, noise)
+        measurement_ops = create_measurement_ops(n_qubits)
+
+        _circuit_cache[cache_key] = {
+            'param_names': param_names,
+            'measurement_ops': measurement_ops,
+            'ansatz_gates': ansatz_gates
+        }
+
+    return _circuit_cache[cache_key]
 
 
 def linear_combination(quantum_outputs: Array, weights: Array, bias: float) -> float:
@@ -358,13 +439,21 @@ def build_simple_qnn_with_linear(n_qubits: int, num_batches: int, num_features: 
 
         return (-1, 1), all_params
 
-    def apply_fn(params, x, **kwargs):
+    def apply_fn(params, x, rng_key=None, **kwargs):
         """Apply QNN with linear combination layer.
 
         Args:
             params: Model parameters
             x: Input data of shape (total_inputs,) - will be reshaped to (num_batches, num_features)
         """
+        # Use provided RNG or create a new one based on current time
+        if rng_key is None:
+            import time
+            rng_key = jax.random.PRNGKey(int(time.time() * 1000000) % (2**32))
+
+        # Split RNG for different uses
+        rng1, rng2 = jax.random.split(rng_key)
+
         # Reshape input from (total_inputs,) to (num_batches, num_features)
         expected_total_inputs = num_batches * num_features
 
@@ -386,10 +475,9 @@ def build_simple_qnn_with_linear(n_qubits: int, num_batches: int, num_features: 
         quantum_outputs = vmapped_qnn(quantum_params_vals, x_batched, n_qubits, n_layers, feature_type, gate_noise)
 
         if add_gaussian_noise_to_qnn_output:
-            rng = kwargs.get('rng', jax.random.PRNGKey(0))
-            if rng is not None and noise_std > 0:
-                noise = jax.random.normal(rng, shape=quantum_outputs.shape) * noise_std
-                quantum_outputs = jnp.array(quantum_outputs + noise).reshape((-1,))
+            if noise_std > 0:
+                noise = jax.random.normal(rng1, shape=quantum_outputs.shape) * noise_std
+                quantum_outputs = quantum_outputs + noise
 
         # Apply linear combination
         final_output = linear_combination(quantum_outputs, linear_weights_vals, bias_val)
@@ -423,9 +511,129 @@ def build_simple_qnn(n_qubits: int, n_layers: int = 2, feature_type: str = "dire
         """Initialize parameters."""
         return (-1, 1), jax.random.uniform(rng, (quantum_params,), minval=-0.1, maxval=0.1)
 
-    def apply_fn(params, x, **kwargs):
+    def apply_fn(params, x, rng_key=None, **kwargs):
         """Apply QNN to input data."""
+        if rng_key is None:
+            raise ValueError("rng_key is required for proper randomness")
         return vmapped_qnn(params, x, n_qubits, n_layers, feature_type, gate_noise)
+
+    return init_fn, apply_fn
+
+
+
+# Add compilation hints for faster JIT
+def set_jax_compilation_options():
+    """Set JAX options for faster compilation."""
+    # Enable XLA optimizations
+    jax.config.update('jax_enable_x64', True)
+
+    # Set compilation cache
+    import os
+    os.environ['JAX_COMPILATION_CACHE_DIR'] = '/tmp/jax_cache'
+
+    # Enable persistent compilation cache
+    jax.config.update('jax_persistent_cache_min_compile_time_secs', 1)
+
+# Call at module level
+set_jax_compilation_options()
+
+# Add progress tracking for long compilations
+def create_circuit_with_progress(n_qubits: int, n_layers: int, feature_type: str = "direct"):
+    """Create circuit with compilation progress tracking."""
+    print(f"Compiling circuit: {n_qubits} qubits, {n_layers} layers...")
+
+    start_time = time.time()
+
+    # Your circuit creation code here
+    quantum_params, _, _ = get_n_params(n_qubits, n_layers, 1)
+    init_fn, apply_fn = build_simple_qnn_with_linear_optimized(
+        n_qubits, 1, n_qubits, n_layers, feature_type, use_checkpointing=True
+    )
+
+    compile_time = time.time() - start_time
+    print(f"✓ Circuit compiled in {compile_time:.2f} seconds")
+
+    return init_fn, apply_fn
+
+
+def build_simple_qnn_with_linear_optimized(n_qubits: int, num_batches: int, num_features: int, n_layers: int = 2, feature_type: str = "direct", add_gaussian_noise_to_qnn_output: bool = False, noise_std: float = 0.001, gate_noise: NoiseProtocol | None = None, use_checkpointing: bool = True):
+    """Build optimized QNN with compilation optimizations.
+
+    Args:
+        use_checkpointing: Whether to use gradient checkpointing for memory efficiency
+    """
+    quantum_params, linear_weights, total_params = get_n_params(n_qubits, n_layers, num_batches)
+
+    # Choose core function based on optimization settings
+    if use_checkpointing:
+        core_fn = simple_qnn_core_checkpointed
+    else:
+        core_fn = simple_qnn_core_optimized
+
+    # Pre-compile the vmapped version with static arguments
+    vmapped_qnn = jax.vmap(
+        core_fn,
+        in_axes=(None, 0, None, None, None, None)
+    )
+
+    # Pre-JIT the vmapped function for faster subsequent calls
+    # Remove gate_noise from static_argnums since it's not hashable
+    @partial(jax.jit, static_argnums=(2, 3, 4))
+    def jitted_vmapped_qnn(params, x_batched, n_qubits, n_layers, feature_type, gate_noise):
+        return vmapped_qnn(params, x_batched, n_qubits, n_layers, feature_type, gate_noise)
+
+    def init_fn(rng, input_shape=None):
+        """Initialize parameters for both quantum and classical parts."""
+        key1, key2, key3 = jax.random.split(rng, 3)
+
+        quantum_params_init = jax.random.uniform(
+            key1, (quantum_params,), minval=-0.1, maxval=0.1
+        )
+        linear_weights_init = jax.random.normal(key2, (linear_weights,)) * 0.1
+        bias_init = jax.random.normal(key3, ()) * 0.1
+
+        all_params = jnp.concatenate([
+            quantum_params_init,
+            linear_weights_init,
+            jnp.array([bias_init])
+        ])
+
+        return (-1, 1), all_params
+
+    def apply_fn(params, x, rng_key=None, **kwargs):
+        """Optimized apply function with pre-compiled components."""
+        if rng_key is None:
+            import time
+            rng_key = jax.random.PRNGKey(int(time.time() * 1000000) % (2**32))
+
+        rng1, rng2 = jax.random.split(rng_key)
+
+        expected_total_inputs = num_batches * num_features
+
+        if x.shape[0] != expected_total_inputs:
+            raise ValueError(
+                f"Input size {x.shape[0]} doesn't match expected size {expected_total_inputs} "
+                f"(num_batches={num_batches} * num_features={num_features})"
+            )
+
+        x_batched = x.reshape(num_batches, num_features)
+
+        quantum_params_vals = params[:quantum_params]
+        linear_weights_vals = params[quantum_params:quantum_params + linear_weights]
+        bias_val = params[-1]
+
+        # Use pre-compiled function
+        quantum_outputs = jitted_vmapped_qnn(
+            quantum_params_vals, x_batched, n_qubits, n_layers, feature_type, gate_noise
+        )
+
+        if add_gaussian_noise_to_qnn_output and noise_std > 0:
+            noise = jax.random.normal(rng1, shape=quantum_outputs.shape) * noise_std
+            quantum_outputs = quantum_outputs + noise
+
+        final_output = linear_combination(quantum_outputs, linear_weights_vals, bias_val)
+
+        return final_output
 
     return init_fn, apply_fn
 
@@ -436,7 +644,7 @@ if __name__ == "__main__":
 
     # Test the simple QNN with linear layer
     n_qubits = 6
-    n_layers = 8
+    n_layers = 12
     num_features = 3  # Features per batch
 
     # Setup realistic data dimensions
@@ -448,6 +656,23 @@ if __name__ == "__main__":
 
     # Initialize
     key = jax.random.PRNGKey(0)
+
+    print("=== Testing Optimized QNN with Linear Output Layer ===")
+    init_fn, apply_fn = build_simple_qnn_with_linear_optimized(n_qubits=n_qubits, num_batches=num_batches, num_features=num_features, n_layers=n_layers, feature_type="direct", add_gaussian_noise_to_qnn_output=True, noise_std=0.001, gate_noise=None, use_checkpointing=True)
+    _, params = init_fn(key)
+    result = apply_fn(params, x)
+    # jit it
+    time_start = time.time()
+    jitted_apply = jax.jit(apply_fn)
+    result_jit = jitted_apply(params, x)
+    time_end = time.time()
+    print(f"Time taken: {time_end - time_start} seconds")
+
+    print(f"JIT result: {result_jit}")
+    print("✓ JIT compilation works correctly")
+    print(f"Result (scalar): {result}")
+    print(f"JIT result: {result_jit}")
+    print(f"Result shape: {result.shape}")
 
     print("=== Testing QNN with Linear Output Layer ===")
     init_fn, apply_fn = build_simple_qnn_with_linear(n_qubits, num_batches, num_features, n_layers, "direct")

@@ -402,7 +402,7 @@ if __name__ == "__main__":
 
     # Load configuration
     config_path = str(
-        project_path / "qedft" / "config" / "train_config_global.yaml"
+        project_path / "qedft" / "config" / "train_config.yaml"
     )
     config = Config(config_path=config_path)
     config_dict = config.config
@@ -410,18 +410,6 @@ if __name__ == "__main__":
     # Update config with proper parameters for output shape
     config_dict.update(
         {
-            "network_type": "mlp_ksr",
-            "n_qubits": 6,
-            "n_var_layers": 4,
-            "n_features": 3,  # Match n_qubits
-            "largest_kernel_width": 2**4,  # Match n_qubits
-            "max_number_conv_layers": 1,
-            "normalization": 1.0,
-            "use_bias_mlp": False,
-            "diff_mode": "ad",
-            "n_shots": 0,
-            "maxiter": 1000,
-            "maxfun": 1000,
             "save_every_n": 50,
         },
     )

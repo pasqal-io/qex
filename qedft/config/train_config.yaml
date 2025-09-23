@@ -1,7 +1,7 @@
 # General experiment settings
 name: test
 experiment_name: test
-network_type: ksr                         # mlp, dqc, adqc, gadqc, ksr, mlp_ksr, conv_dqc, dqc_tfm, gadqc_with_mlp
+network_type: ksr                    # mlp, dqc, adqc, gadqc, ksr, mlp_ksr, conv_dqc, dqc_tfm, gadqc_with_mlp
 molecule_name: h2
 molecule_names: [h2]               # h2, h2_h2, h4, h2_plus allowed
 dataset1: [128, 384]                       # Dataset dimensions
@@ -39,8 +39,8 @@ max_train_steps: 10000                    # Maximum number of training steps
 factr: 1.0                                # L-BFGS convergence factor
 pgtol: 1.0e-14                            # L-BFGS gradient tolerance
 m: 20                                     # L-BFGS memory parameter
-maxfun: 20                                # Maximum number of function evaluations
-maxiter: 2                                    # L-BFGS memory parameter
+maxfun: 10000                             # Maximum number of function evaluations
+maxiter: 10000                            # L-BFGS memory parameter
 
 # DFT parameters
 num_iterations: 15                        # Number of SCF iterations
@@ -51,10 +51,10 @@ alpha_decay: 0.9                          # Decay rate for mixing parameter
 num_mixing_iterations: 1                  # Number of density mixing iterations
 density_mse_converge_tolerance: -1.0      # Convergence tolerance (-1 = disabled)
 stop_gradient_step: -1                    # When to stop gradient (-1 = never)
-enforce_reflection_symmetry: false        # Enforce reflection symmetry
+enforce_reflection_symmetry: true        # Enforce reflection symmetry
 use_relative_encoding: false              # Use relative position encoding
 num_grids: 513                            # Number of spatial grid points
-use_amplitude_encoding: false             # Whether to use amplitude encoding
+use_amplitude_encoding: false              # Whether to use amplitude encoding
 
 # QConv settings
 max_number_conv_layers: 100               # Maximum number of convolutional layers
