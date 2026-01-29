@@ -21,9 +21,10 @@ horqrux = "^0.9.2"
 jax_dft = {git = "https://github.com/google-research/google-research.git", rev = "c27ed001a50cf23f8db4d8ab4c537a36a72982de", subdirectory = "jax_dft"}
 ipykernel = "^6.29.5"
 seaborn = "^0.13.2"
+pytest = "^9.0.2"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.4.0"
+pytest = "^9.0.2"
 pytest-cov = "^6.1.1"
 taskipy = "^1.14.1"
 black = "^25.1.0"

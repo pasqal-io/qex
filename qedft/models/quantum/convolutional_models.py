@@ -360,7 +360,11 @@ def construct_convolutional_model(
             }
 
             mlp = GlobalMLP(config_dict=mlp_config)
-            init_fn, apply_fn = mlp.build_network(grids)
+            # Use the correct input size from the previous layer output
+            # Was being initialized with grids (the original input dimension),
+            # should have been initialized with a grid size of layer.
+            mlp_input_grids = jnp.ones(list_outputs_per_conv_layer[-1])
+            init_fn, apply_fn = mlp.build_network(mlp_input_grids)
             list_conv_layers.append((init_fn, apply_fn))
         else:
             raise ValueError(

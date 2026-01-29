@@ -33,3 +33,4 @@ ckpts/
 
 # Data
 data/td/
+*lock
