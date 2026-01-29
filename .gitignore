@@ -9,9 +9,6 @@
 *.egg
 *egg-info
 
-# Cache
-/
-
 # Python cache
 __pycache__/
 
@@ -20,13 +17,6 @@ __py**
 # Python bytecode
 *.pyc
 
-# Legacy repository
-old_od_repository/
-old_td_repository/
-old_horqrux/
-
-# Dev folders
-*_dev/
 # Checkpoints
 *ckpt
 ckpts/
@@ -34,3 +24,6 @@ ckpts/
 # Data
 data/td/
 *lock
+
+# Pre-commit
+!.pre-commit-config.yaml
