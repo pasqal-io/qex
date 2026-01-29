@@ -5,6 +5,9 @@
 # Quantum-Enhanced Density Functional Theory in JAX (QEX)
 
 [![arXiv](https://img.shields.io/badge/arXiv-2404.14258-b31b1b.svg)](https://arxiv.org/abs/2404.14258)
+[![Phys. Rev. A](https://img.shields.io/badge/Phys._Rev._A-10.1103%2Fm51l--fys2-00599c)](https://doi.org/10.1103/m51l-fys2)
+
+**Update 29.01.2026:** The work was published in Physical Review A. The work on this repository is ongoing at Pasqal, with the goal of hardware implementation.
 
 ## Overview
 
@@ -170,6 +173,7 @@ These scripts will typically:
 
 - For now, the 1D implementation can be fully jitted and parallelized (KS-DFT and XC model), while the 3D implementation only the network is jitted. We implemented so far exactly what was in the original [paper](https://arxiv.org/abs/2404.14258) (Sokolov et al., arXiv:2404.14258, 2024).
 - In future, we will add a fully vectorized 3D implementation that can be trained on a large dataset.
+  - The code will be added after the next publication is pushed to arXiv.  
 
 ## Citation
 
