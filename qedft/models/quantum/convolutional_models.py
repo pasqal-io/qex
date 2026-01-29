@@ -38,7 +38,7 @@ def add_gaussian_noise_layer(network: tuple[Callable, Callable], noise_std: floa
 
     def noisy_apply_fn(params, inputs, rng_key=None, **kwargs):
         outputs = apply_fn(params, inputs, **kwargs)
-        rng = kwargs.get('rng', jax.random.PRNGKey(0))
+        rng = kwargs.get("rng", jax.random.PRNGKey(0))
         if rng is not None and noise_std > 0:
             noise = jax.random.normal(rng, shape=outputs.shape) * noise_std
             return jnp.array(outputs + noise).reshape((-1,))
@@ -231,19 +231,22 @@ def construct_convolutional_model(
 
                 def apply_fn_noisy(params, inputs, rng_key=None, **kwargs):
                     output = apply_fn(params, inputs, **kwargs)
-                    rng_key = kwargs.get('rng', jax.random.PRNGKey(0))
+                    rng_key = kwargs.get("rng", jax.random.PRNGKey(0))
                     rng1, rng2 = jax.random.split(rng_key)
                     if add_gaussian_noise_to_qnn_output:
                         if gaussian_noise_std > 0:
-                            noise = jax.random.normal(rng1, shape=output.shape) * gaussian_noise_std
+                            noise = (
+                                jax.random.normal(rng1, shape=output.shape) * gaussian_noise_std
+                            )
                             output = output + noise
                     return output
 
                 # Add gaussian noise to the output of QNN in addition to the gate noise
                 if add_gaussian_noise_to_qnn_output:
-                    logger.info(f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}")
+                    logger.info(
+                        f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}",
+                    )
                     apply_fn = apply_fn_noisy
-
 
                 list_conv_layers.append((init_fn, apply_fn))
             else:
@@ -256,17 +259,21 @@ def construct_convolutional_model(
                 # Add gaussian noise to the output of QNN in addition to the gate noise
                 def apply_fn_noisy(params, inputs, rng_key=None, **kwargs):
                     output = apply_fn(params, inputs, **kwargs)
-                    rng_key = kwargs.get('rng', jax.random.PRNGKey(0))
+                    rng_key = kwargs.get("rng", jax.random.PRNGKey(0))
                     rng1, rng2 = jax.random.split(rng_key)
                     if add_gaussian_noise_to_qnn_output:
                         if gaussian_noise_std > 0:
-                            noise = jax.random.normal(rng1, shape=output.shape) * gaussian_noise_std
+                            noise = (
+                                jax.random.normal(rng1, shape=output.shape) * gaussian_noise_std
+                            )
                             output = output + noise
                     return output
 
                 # Add gaussian noise to the output of QNN in addition to the gate noise
                 if add_gaussian_noise_to_qnn_output:
-                    logger.info(f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}")
+                    logger.info(
+                        f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}",
+                    )
                     apply_fn = apply_fn_noisy
 
                 list_conv_layers.append((init_fn, apply_fn))
@@ -290,7 +297,7 @@ def construct_convolutional_model(
             # Add gaussian noise to the output of QNN in addition to the gate noise
             def apply_fn_noisy(params, inputs, rng_key=None, **kwargs):
                 output = apply_fn(params, inputs, **kwargs)
-                rng_key = kwargs.get('rng', jax.random.PRNGKey(0))
+                rng_key = kwargs.get("rng", jax.random.PRNGKey(0))
                 rng1, rng2 = jax.random.split(rng_key)
                 if add_gaussian_noise_to_qnn_output:
                     if gaussian_noise_std > 0:
@@ -300,7 +307,9 @@ def construct_convolutional_model(
 
             # Add gaussian noise to the output of QNN in addition to the gate noise
             if add_gaussian_noise_to_qnn_output:
-                logger.info(f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}")
+                logger.info(
+                    f"Adding gaussian noise to the output of QNN with std {gaussian_noise_std}",
+                )
                 apply_fn = apply_fn_noisy
 
             list_conv_layers.append((init_fn, apply_fn))
@@ -502,7 +511,9 @@ def construct_convolutional_model_reverse(
         def init_final_mlp(rng, input_shape):
             k1, k2 = jax.random.split(rng)
             output_size = n_qubits
-            input_size = list_outputs_per_conv_layer[-1]  # Use the known output size from previous layer
+            input_size = list_outputs_per_conv_layer[
+                -1
+            ]  # Use the known output size from previous layer
             w = jax.random.normal(k1, (input_size, output_size)) * 0.1
             b = None
             if use_bias_mlp:
@@ -575,7 +586,7 @@ def construct_convolutional_model_classical_to_quantum(
 
     # NOTE: I think we want to avoid making classical too good here.
     # logger.info(
-        # f"BatchedGlobalMLP Layer {i}: neurons {n_neurons}",
+    # f"BatchedGlobalMLP Layer {i}: neurons {n_neurons}",
     # )
     # # n_qubits_layer is the number of neurons in the layer
     # bmlp_config = {
@@ -717,7 +728,9 @@ def construct_convolutional_model_quantum_to_classical(
     # ====================
 
     # Create mock grids for GlobalQNN initialization
-    logger.info(f"Using MLP layer from {input_dimension // n_qubits} inputs to {n_features} outputs")
+    logger.info(
+        f"Using MLP layer from {input_dimension // n_qubits} inputs to {n_features} outputs",
+    )
     mlp_layers.append(stax.Dense(n_features))
     # Create the MLP network
     mlp_network = stax.serial(*mlp_layers)
@@ -743,6 +756,7 @@ def construct_convolutional_model_quantum_to_classical(
     list_conv_layers.append((init_fn, apply_fn))
 
     return list_conv_layers
+
 
 # ================================================================
 # Factory function
@@ -1183,9 +1197,12 @@ if __name__ == "__main__":
     print_section("Quantum to Classical QNN with Gaussian Noise")
     # Test QNN with noise
     from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
+
     # Test with low noise (0.1%)
-    noise = (DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
-            DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1))
+    noise = (
+        DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
+        DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1),
+    )
     init_fn, apply_fn = build_conv_qnn_quantum_to_classical(
         n_qubits=n_qubits,
         n_var_layers=n_var_layers,
@@ -1205,9 +1222,12 @@ if __name__ == "__main__":
     print_section("Classical to Quantum QNN with Gaussian Noise")
     # Test QNN with noise
     from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
+
     # Test with low noise (0.1%)
-    noise = (DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
-            DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1))
+    noise = (
+        DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
+        DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1),
+    )
     init_fn, apply_fn = build_conv_qnn_classical_to_quantum(
         n_qubits=n_qubits,
         n_var_layers=n_var_layers,
@@ -1227,9 +1247,12 @@ if __name__ == "__main__":
     print_section("Reverse Convolutional QNN with Gaussian Noise")
     # Test QNN with noise
     from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
+
     # Test with low noise (0.1%)
-    noise = (DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
-            DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1))
+    noise = (
+        DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
+        DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1),
+    )
     init_fn, apply_fn = build_conv_qnn_reverse(
         n_qubits=n_qubits,
         n_var_layers=n_var_layers,
@@ -1317,9 +1340,12 @@ if __name__ == "__main__":
 
     print_section("Standard Convolutional QNN with Gaussian, Bitflip, and Amplitude Damping Noise")
     from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
+
     # Test with low noise (0.1%)
-    noise = (DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
-            DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1))
+    noise = (
+        DigitalNoiseInstance(DigitalNoiseType.BITFLIP, 0.1),
+        DigitalNoiseInstance(DigitalNoiseType.AMPLITUDE_DAMPING, 0.1),
+    )
     init_fn, apply_fn = build_conv_qnn(
         n_qubits=n_qubits,
         n_var_layers=n_var_layers,

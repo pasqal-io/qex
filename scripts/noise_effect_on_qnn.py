@@ -8,30 +8,23 @@ on the training loss of a GlobalQNNClassicalToQuantum model.
 """
 
 import os
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
-import qedft
 import jax
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
+from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 from jax import config, random
 from jax_dft import np_utils
-from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 
+import qedft
 from qedft.config.config import Config
 from qedft.data_io.dataset_loader import load_molecular_datasets_from_config
-from qedft.models.networks import (
-    GlobalQNNClassicalToQuantum,
-    GlobalQNNQuantumToClassical,
-)
-from qedft.train.od.train import (
-    create_kohn_sham_fn,
-    create_loss_fn,
-    create_training_step,
-)
+from qedft.models.networks import GlobalQNNClassicalToQuantum, GlobalQNNQuantumToClassical
 from qedft.models.wrappers import wrap_network_from_config
+from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
 
 # Set the default dtype as float64
 config.update("jax_enable_x64", True)
@@ -44,7 +37,10 @@ print(f"Project path: {project_path}")
 
 
 def calculate_noise_probabilities(
-    t1_ns: float, t2_ns: float, gate_time_ns: float, readout_error: float
+    t1_ns: float,
+    t2_ns: float,
+    gate_time_ns: float,
+    readout_error: float,
 ):
     """
     Calculate realistic noise probabilities from IBM device parameters.
@@ -80,7 +76,8 @@ def calculate_noise_probabilities(
 
 
 def create_realistic_noise_config(
-    noise_scale: float = 1.0, device_type: str = "best"
+    noise_scale: float = 1.0,
+    device_type: str = "best",
 ):
     """
     Creates realistic noise configuration based on IBM device parameters.
@@ -113,8 +110,7 @@ def create_realistic_noise_config(
 
     # Scale noise probabilities
     scaled_probs = {
-        key: min(prob * noise_scale, 1.0)  # Cap at 1.0
-        for key, prob in noise_probs.items()
+        key: min(prob * noise_scale, 1.0) for key, prob in noise_probs.items()  # Cap at 1.0
     }
 
     print(f"Scaled noise probabilities: {scaled_probs}")
@@ -123,10 +119,11 @@ def create_realistic_noise_config(
     quantum_noise = (
         DigitalNoiseInstance(
             DigitalNoiseType.AMPLITUDE_DAMPING,
-            scaled_probs["amplitude_damping"]
+            scaled_probs["amplitude_damping"],
         ),
         DigitalNoiseInstance(
-            DigitalNoiseType.PHASE_DAMPING, scaled_probs["phase_damping"]
+            DigitalNoiseType.PHASE_DAMPING,
+            scaled_probs["phase_damping"],
         ),
     )
 
@@ -142,7 +139,9 @@ def create_realistic_noise_config(
 
 
 def evaluate_with_noise(
-    config_dict, noise_scales=[0.0, 0.1, 0.5, 1.0, 2.0, 5.0], results_dir=None
+    config_dict,
+    noise_scales=[0.0, 0.1, 0.5, 1.0, 2.0, 5.0],
+    results_dir=None,
 ):
     """
     Evaluates model performance with different noise scale factors.
@@ -182,8 +181,7 @@ def evaluate_with_noise(
     for noise_scale in noise_scales:
         for device_type in ["best", "worst"]:
             print(
-                f"\n--- Testing {device_type} device with "
-                f"noise scale {noise_scale} ---"
+                f"\n--- Testing {device_type} device with " f"noise scale {noise_scale} ---",
             )
 
             # Create model based on config
@@ -191,7 +189,8 @@ def evaluate_with_noise(
 
             # Create model
             classical_to_quantum = model_config.get(
-                "classical_to_quantum", True
+                "classical_to_quantum",
+                True,
             )
             if classical_to_quantum is False:
                 print("Using GlobalQNNQuantumToClassical model")
@@ -210,7 +209,8 @@ def evaluate_with_noise(
                 }
             else:
                 noise_config = create_realistic_noise_config(
-                    noise_scale, device_type
+                    noise_scale,
+                    device_type,
                 )
 
             network = model.build_network(grids, noise=noise_config["noise"])
@@ -219,7 +219,9 @@ def evaluate_with_noise(
             prng = random.PRNGKey(config_dict.get("seed", 42))
             # Use model_config here
             wrapped_network = wrap_network_from_config(
-                network, grids, model_config
+                network,
+                grids,
+                model_config,
             )
 
             # Test direct initialization networks
@@ -235,18 +237,20 @@ def evaluate_with_noise(
                     outputs = original_fn(inputs, params)
                     # Use a consistent noise key
                     noise_key = random.PRNGKey(42)
-                    noise = jax.random.normal(
-                        noise_key, shape=outputs.shape
-                    ) * gaussian_std
+                    noise = (
+                        jax.random.normal(
+                            noise_key,
+                            shape=outputs.shape,
+                        )
+                        * gaussian_std
+                    )
                     return outputs + noise
 
-                neural_xc_energy_density_fn = (
-                    noisy_neural_xc_energy_density_fn
-                )
+                neural_xc_energy_density_fn = noisy_neural_xc_energy_density_fn
 
             # JIT the neural_xc_energy_density_fn
             neural_xc_energy_density_fn = jax.jit(
-                neural_xc_energy_density_fn
+                neural_xc_energy_density_fn,
             )
             spec, flatten_init_params = np_utils.flatten(init_params)
 
@@ -260,14 +264,15 @@ def evaluate_with_noise(
             )
 
             loss_fn = create_loss_fn(
-                batch_kohn_sham, grids, dataset, config_dict
+                batch_kohn_sham,
+                grids,
+                dataset,
+                config_dict,
             )
             value_and_grad_fn = jax.jit(jax.value_and_grad(loss_fn))
 
             # Create checkpoint directory specific to device and noise scale
-            device_noise_str = (
-                f"{device_type}_scale_{noise_scale:.6f}".replace(".", "p")
-            )
+            device_noise_str = f"{device_type}_scale_{noise_scale:.6f}".replace(".", "p")
             if results_dir is not None:
                 checkpoint_dir = results_dir / "checkpoints" / device_noise_str
             else:
@@ -402,7 +407,7 @@ if __name__ == "__main__":
 
     # Load configuration
     config_path = str(
-        project_path / "qedft" / "config" / "train_config.yaml"
+        project_path / "qedft" / "config" / "train_config.yaml",
     )
     config = Config(config_path=config_path)
     config_dict = config.config
@@ -441,20 +446,12 @@ if __name__ == "__main__":
         # Convert numpy values to Python native types for JSON serialization
         serializable_results = {
             "noise_scales": [float(x) for x in results["noise_scales"]],
-            "losses_best": [
-                float(x) if not np.isnan(x) else None
-                for x in results["losses_best"]
-            ],
+            "losses_best": [float(x) if not np.isnan(x) else None for x in results["losses_best"]],
             "losses_worst": [
-                float(x) if not np.isnan(x) else None
-                for x in results["losses_worst"]
+                float(x) if not np.isnan(x) else None for x in results["losses_worst"]
             ],
-            "convergence_best": [
-                bool(x) for x in results["convergence_best"]
-            ],
-            "convergence_worst": [
-                bool(x) for x in results["convergence_worst"]
-            ],
+            "convergence_best": [bool(x) for x in results["convergence_best"]],
+            "convergence_worst": [bool(x) for x in results["convergence_worst"]],
         }
         json.dump(serializable_results, f, indent=2)
 

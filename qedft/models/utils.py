@@ -29,8 +29,10 @@ if __name__ == "__main__":
     print(count_parameters(params))
 
     # Example of a QNN with 6 qubits, 8 convolutional layers, and 1 output for the paper
-    from qedft.models.quantum.convolutional_models import construct_convolutional_model_classical_to_quantum
-    from qedft.models.quantum.convolutional_models import construct_convolutional_model_quantum_to_classical
+    from qedft.models.quantum.convolutional_models import (
+        construct_convolutional_model_classical_to_quantum,
+        construct_convolutional_model_quantum_to_classical,
+    )
 
     n_qubits = 6
     n_var_layers = 8

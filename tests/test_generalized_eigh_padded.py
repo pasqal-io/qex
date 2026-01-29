@@ -246,12 +246,14 @@ def test_basic_functionality(setup_basic_matrices):
 
         # Check that eigenvalues match in the real region
         assert jnp.allclose(
-            test_energy[:real_size], ref_energy
+            test_energy[:real_size],
+            ref_energy,
         ), f"Eigenvalues don't match for size {real_size}x{real_size}"
 
         # Check that padding is zeroed out
         assert jnp.allclose(
-            test_energy[real_size:], jnp.zeros(pad_size - real_size)
+            test_energy[real_size:],
+            jnp.zeros(pad_size - real_size),
         ), f"Padded eigenvalues should be zero for size {real_size}x{real_size}"
 
         # Check that eigenvectors match
@@ -300,11 +302,15 @@ def test_edge_cases(setup_edge_cases):
             # For degenerate case, check that the first eigenvalue matchesd
             # since we have a special eigh for degenerate case
             assert jnp.allclose(
-                test_energy[0], ref_energy[0], atol=1e-5
+                test_energy[0],
+                ref_energy[0],
+                atol=1e-5,
             ), f"Eigenvalues don't match for case: {case_name}, {test_energy}, {ref_energy}"
         else:
             assert jnp.allclose(
-                test_energy[:real_size], ref_energy, atol=1e-5
+                test_energy[:real_size],
+                ref_energy,
+                atol=1e-5,
             ), f"Eigenvalues don't match for case: {case_name}, {test_energy}, {ref_energy}"
 
         # In future, the eigensolver can be fixed for these cases.
@@ -371,7 +377,9 @@ def test_special_masks(setup_special_masks):
 
         # Check that the eigenvalues match (only the lowest ones matter)
         assert jnp.allclose(
-            sorted_energy[0], sorted_ref_energy[0], atol=1e-5
+            sorted_energy[0],
+            sorted_ref_energy[0],
+            atol=1e-5,
         ), f"Eigenvalues don't match for case: {case_name}"
 
 
@@ -388,10 +396,10 @@ def test_padding_independence(setup_basic_matrices):
 
         # Create versions with different padding values
         f_padded_100 = f_padded.at[real_size:, real_size:].set(
-            jnp.ones((pad_size - real_size, pad_size - real_size)) * 100.0
+            jnp.ones((pad_size - real_size, pad_size - real_size)) * 100.0,
         )
         s_padded_100 = s_padded.at[real_size:, real_size:].set(
-            jnp.ones((pad_size - real_size, pad_size - real_size)) * 100.0
+            jnp.ones((pad_size - real_size, pad_size - real_size)) * 100.0,
         )
 
         # Run the masked solver on original and modified matrices
@@ -400,7 +408,9 @@ def test_padding_independence(setup_basic_matrices):
 
         # Check that the eigenvalues and eigenvectors match in the real region
         assert jnp.allclose(
-            energy1[:real_size], energy2[:real_size], atol=1e-5
+            energy1[:real_size],
+            energy2[:real_size],
+            atol=1e-5,
         ), f"Eigenvalues should be independent of padding for size {real_size}x{real_size}"
 
         # Check eigenvectors in real region (allowing for sign differences)
@@ -408,7 +418,9 @@ def test_padding_independence(setup_basic_matrices):
             vec1 = coeff1[:real_size, i]
             vec2 = coeff2[:real_size, i]
             assert jnp.allclose(
-                jnp.abs(vec1), jnp.abs(vec2), atol=1e-5
+                jnp.abs(vec1),
+                jnp.abs(vec2),
+                atol=1e-5,
             ), f"Eigenvectors should be independent of padding for size {real_size}x{real_size}"
 
 
@@ -452,15 +464,17 @@ def test_gradient_computation():
 
     # Check that gradient is non-zero in the real region
     assert jnp.any(
-        jnp.abs(grad[:real_size, :real_size]) > 1e-10
+        jnp.abs(grad[:real_size, :real_size]) > 1e-10,
     ), "Gradient should be non-zero in the real region"
 
     # Check that gradient is zero in the padded region
     assert jnp.allclose(
-        grad[real_size:, :], jnp.zeros((pad_size - real_size, pad_size))
+        grad[real_size:, :],
+        jnp.zeros((pad_size - real_size, pad_size)),
     ), "Gradient should be zero in the padded region"
     assert jnp.allclose(
-        grad[:, real_size:], jnp.zeros((pad_size, pad_size - real_size))
+        grad[:, real_size:],
+        jnp.zeros((pad_size, pad_size - real_size)),
     ), "Gradient should be zero in the padded region"
 
 
@@ -500,12 +514,15 @@ def test_large_matrix_small_active():
 
     # Check that eigenvalues match in the active region
     assert jnp.allclose(
-        test_energy[:real_size], ref_energy, atol=1e-5
+        test_energy[:real_size],
+        ref_energy,
+        atol=1e-5,
     ), f"Eigenvalues don't match for large matrix with small active region {real_size}x{real_size}, {test_energy[:real_size]}, {ref_energy}"
 
     # Check that padding is zeroed out
     assert jnp.allclose(
-        test_energy[real_size:], jnp.zeros(pad_size - real_size)
+        test_energy[real_size:],
+        jnp.zeros(pad_size - real_size),
     ), "Padded eigenvalues should be zero for large matrix with small active region"
 
 

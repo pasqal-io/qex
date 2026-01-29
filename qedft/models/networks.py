@@ -386,7 +386,7 @@ class GlobalQNN(KohnShamNetwork):
             n_out=1,  # Always output a single value per point
             input_dimension=input_dimension,
             largest_kernel_width=self.config.get("largest_kernel_width", 4),
-            max_number_conv_layers=1, # TODO: self.config.get("max_number_conv_layers", 100),
+            max_number_conv_layers=1,  # TODO: self.config.get("max_number_conv_layers", 100),
             list_qubits_per_layer=self.config.get("list_qubits_per_layer", []),
             force_qubits_per_layer_is_kernel_width=self.config.get(
                 "force_qubits_per_layer_is_kernel_width",
@@ -400,7 +400,9 @@ class GlobalQNN(KohnShamNetwork):
             diff_mode=self.config.get("diff_mode", DiffMode.AD),
             n_shots=self.config.get("n_shots", 0),
             key=self.config.get("key", jax.random.PRNGKey(0)),
-            add_gaussian_noise_to_qnn_output=self.config.get("add_gaussian_noise_to_qnn_output", False),
+            add_gaussian_noise_to_qnn_output=self.config.get(
+                "add_gaussian_noise_to_qnn_output", False,
+            ),
             gaussian_noise_std=self.config.get("gaussian_noise_std", 0.001),
         )
 
@@ -498,7 +500,7 @@ class GlobalQNNClassicalToQuantum(KohnShamNetwork):
     kernel widths determined by the input dimension.
     """
 
-    def __init__(self, config_dict: dict | None = None, noise = None):
+    def __init__(self, config_dict: dict | None = None, noise=None):
         """Initialize from config dictionary."""
         super().__init__(config_dict)
         self.config = {
@@ -633,6 +635,7 @@ class GlobalQNNQuantumToClassical(KohnShamNetwork):
 # ================================================================
 # Quantum Inspired models
 # ================================================================
+
 
 class GlobalQiCQNN(KohnShamNetwork):
     """Convolutional Quantum Neural Network where QNNs use amplitude encoding for data.
@@ -854,7 +857,9 @@ if __name__ == "__main__":
 
     # Create different QNN models
     models = {
-        "GlobalQNNQuantumToClassical": GlobalQNNQuantumToClassical(config_dict={"n_qubits": 4, "n_features": 2}),
+        "GlobalQNNQuantumToClassical": GlobalQNNQuantumToClassical(
+            config_dict={"n_qubits": 4, "n_features": 2},
+        ),
         "GlobalQNNClassicalToQuantum": GlobalQNNClassicalToQuantum(config_dict={"n_qubits": 6}),
         "GlobalQNNReverse": GlobalQNNReverse(
             config_dict={"n_qubits": 6},

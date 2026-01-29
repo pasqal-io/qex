@@ -175,7 +175,7 @@ These scripts will typically:
 
 - For now, the 1D implementation can be fully jitted and parallelized (KS-DFT and XC model), while the 3D implementation only the network is jitted. We implemented so far exactly what was in the original [paper](https://arxiv.org/abs/2404.14258) (Sokolov et al., arXiv:2404.14258, 2024).
 - In future, we will add a fully vectorized 3D implementation that can be trained on a large dataset.
-  - The code will be added after the next publication is pushed to arXiv.  
+  - The code will be added after the next publication is pushed to arXiv.
 
 ## Citation
 
