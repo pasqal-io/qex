@@ -180,7 +180,7 @@ class BatchedGlobalMLP(KohnShamNetwork):
 class LocalQNN(KohnShamNetwork):
     """Basic QNN with angle encoding."""
 
-    def __init__(self, config_dict: dict | None = None):
+    def __init__(self, config_dict: dict | None = None, noise: NoiseProtocol | None = None):
         """Initialize from config dictionary."""
         super().__init__(config_dict)
         self.config = {
@@ -195,12 +195,19 @@ class LocalQNN(KohnShamNetwork):
         if config_dict is not None:
             self.config.update(config_dict)
 
+        self.noise = noise
+
     def build_network(
         self,
         grids: jnp.ndarray,
         noise: NoiseProtocol | None = None,
     ) -> tuple[Callable, Callable]:
         from qedft.models.quantum.quantum_models import build_qnn
+
+        if self.noise is None:
+            self.noise = noise
+
+        logger.info(f"Using noise: {self.noise}")
 
         return build_qnn(
             n_qubits=self.config.get("n_qubits", 2),
@@ -214,7 +221,7 @@ class LocalQNN(KohnShamNetwork):
             map_fn=self.config.get("map_fn", None),
             grids=grids,
             n_features=self.config.get("n_features", 1),
-            noise=noise,
+            noise=self.noise,
             diff_mode=self.config.get("diff_mode", DiffMode.AD),
             n_shots=self.config.get("n_shots", 0),
             key=self.config.get("key", jax.random.PRNGKey(0)),
@@ -254,7 +261,7 @@ class GlobalQNNLayer(KohnShamNetwork):
             n_features=self.config.get("n_features", 1),
             ansatz=self.config.get(
                 "ansatz",
-                hea(self.config.get("n_qubits", 2), self.config.get("n_layers", 2)),
+                hea(self.config.get("n_qubits", 2), self.config.get("n_var_layers", 2)),
             ),
             state=self.config.get("state", zero_state(self.config.get("n_qubits", 2))),
             qnn_type=self.config.get("qnn_type", "GlobalQNN"),
@@ -323,6 +330,97 @@ class GlobalQNN(KohnShamNetwork):
     kernel widths determined by the input dimension.
     """
 
+    def __init__(self, config_dict: dict | None = None, noise: NoiseProtocol | None = None):
+        """Initialize from config dictionary."""
+        super().__init__(config_dict)
+        self.config = {
+            "network_type": "conv_dqc",
+            "wrap_self_interaction": False,
+            "wrap_with_negative_transform": True,
+            "use_amplitude_encoding": True,  # This model uses global encoding
+            "n_qubits": 4,
+            "n_var_layers": 2,
+            "n_layers": 2,
+            "largest_kernel_width": 4,
+            "max_number_conv_layers": 100,
+            "list_qubits_per_layer": [],
+            "force_qubits_per_layer_is_kernel_width": False,
+            "normalization": 1.0,
+            "last_layer_type": "dense",  # "dense" or "mlp"
+            "use_bias_mlp": False,
+            "last_layer_features": [1],
+            "add_gaussian_noise_to_qnn_output": False,
+            "gaussian_noise_std": 0.001,
+        }
+        if config_dict is not None:
+            self.config.update(config_dict)
+
+        self.noise = noise
+
+    def build_network(
+        self,
+        grids: jnp.ndarray,
+        noise: NoiseProtocol | None = None,
+    ) -> tuple[Callable, Callable]:
+        """Build the convolutional quantum neural network.
+
+        Args:
+            grids: Grid points for the density functional calculations.
+
+        Returns:
+            tuple: (init_fn, apply_fn) pair of network initialization and application functions.
+        """
+        from qedft.models.quantum.convolutional_models import build_conv_qnn
+
+        # Get the input dimension from the grid size
+        input_dimension = grids.shape[0]
+
+        if self.noise is None:
+            self.noise = noise
+            logger.info(f"Using noise: {self.noise}")
+
+        # Construct the full convolutional model
+        network = build_conv_qnn(
+            n_qubits=self.config.get("n_qubits", 4),
+            n_var_layers=self.config.get("n_var_layers", 2),
+            n_out=1,  # Always output a single value per point
+            input_dimension=input_dimension,
+            largest_kernel_width=self.config.get("largest_kernel_width", 4),
+            max_number_conv_layers=1, # TODO: self.config.get("max_number_conv_layers", 100),
+            list_qubits_per_layer=self.config.get("list_qubits_per_layer", []),
+            force_qubits_per_layer_is_kernel_width=self.config.get(
+                "force_qubits_per_layer_is_kernel_width",
+                False,
+            ),
+            normalization=self.config.get("normalization", 1.0),
+            last_layer_type=self.config.get("last_layer_type", "dense"),
+            use_bias_mlp=self.config.get("use_bias_mlp", False),
+            last_layer_features=self.config.get("last_layer_features", [1]),
+            noise=self.noise,
+            diff_mode=self.config.get("diff_mode", DiffMode.AD),
+            n_shots=self.config.get("n_shots", 0),
+            key=self.config.get("key", jax.random.PRNGKey(0)),
+            add_gaussian_noise_to_qnn_output=self.config.get("add_gaussian_noise_to_qnn_output", False),
+            gaussian_noise_std=self.config.get("gaussian_noise_std", 0.001),
+        )
+
+        # Build the full network with the convolutional layers
+        return network
+
+
+# ================================================================
+# Quantum models for paper proofs
+# ================================================================
+
+
+class GlobalQNNReverse(KohnShamNetwork):
+    """Convolutional Quantum Neural Network.
+
+    This model applies a series of quantum convolutional layers to process
+    the input density, reducing the dimension at each step according to
+    kernel widths determined by the input dimension.
+    """
+
     def __init__(self, config_dict: dict | None = None):
         """Initialize from config dictionary."""
         super().__init__(config_dict)
@@ -358,13 +456,13 @@ class GlobalQNN(KohnShamNetwork):
         Returns:
             tuple: (init_fn, apply_fn) pair of network initialization and application functions.
         """
-        from qedft.models.quantum.convolutional_models import build_conv_qnn
+        from qedft.models.quantum.convolutional_models import build_conv_qnn_reverse
 
         # Get the input dimension from the grid size
         input_dimension = grids.shape[0]
 
         # Construct the full convolutional model
-        network = build_conv_qnn(
+        network = build_conv_qnn_reverse(
             n_qubits=self.config.get("n_qubits", 4),
             n_var_layers=self.config.get("n_var_layers", 2),
             n_out=1,  # Always output a single value per point
@@ -389,6 +487,152 @@ class GlobalQNN(KohnShamNetwork):
         # Build the full network with the convolutional layers
         return network
 
+
+class GlobalQNNClassicalToQuantum(KohnShamNetwork):
+    """Convolutional Quantum Neural Network.
+
+    Model for paper: to test the effects of noise on the training
+
+    This model applies a series of quantum convolutional layers to process
+    the input density, reducing the dimension at each step according to
+    kernel widths determined by the input dimension.
+    """
+
+    def __init__(self, config_dict: dict | None = None, noise = None):
+        """Initialize from config dictionary."""
+        super().__init__(config_dict)
+        self.config = {
+            "network_type": "conv_dqc",
+            "wrap_self_interaction": False,
+            "wrap_with_negative_transform": False,
+            "use_amplitude_encoding": False,  # This model uses global encoding
+            "n_qubits": 4,
+            "n_var_layers": 2,
+            "largest_kernel_width": 4,
+            "max_number_conv_layers": 100,
+            "list_qubits_per_layer": [],
+            "force_qubits_per_layer_is_kernel_width": False,
+            "normalization": 1.0,
+            "last_layer_type": "dense",  # "dense" or "mlp"
+            "use_bias_mlp": False,
+            "last_layer_features": [1],
+        }
+        if config_dict is not None:
+            self.config.update(config_dict)
+
+        self.noise = noise
+
+    def build_network(
+        self,
+        grids: jnp.ndarray,
+        noise: NoiseProtocol | None = None,
+    ) -> tuple[Callable, Callable]:
+        """Build the convolutional quantum neural network.
+
+        Args:
+            grids: Grid points for the density functional calculations.
+
+        Returns:
+            tuple: (init_fn, apply_fn) pair of network initialization and application functions.
+        """
+        from qedft.models.quantum.convolutional_models import build_conv_qnn_classical_to_quantum
+
+        # Get the input dimension from the grid size
+        input_dimension = grids.shape[0]
+
+        if self.noise is None:
+            self.noise = noise
+            print(f"Using noise: {self.noise}")
+
+        # Construct the full convolutional model
+        network = build_conv_qnn_classical_to_quantum(
+            n_qubits=self.config.get("n_qubits", 4),
+            n_var_layers=self.config.get("n_var_layers", 2),
+            n_out=1,  # NOTE: not used in this model
+            input_dimension=input_dimension,
+            normalization=self.config.get("normalization", 1.0),
+            use_bias_mlp=self.config.get("use_bias_mlp", False),
+            noise=self.noise,
+            diff_mode=self.config.get("diff_mode", DiffMode.AD),
+            n_shots=self.config.get("n_shots", 0),
+            key=self.config.get("key", jax.random.PRNGKey(0)),
+        )
+
+        # Build the full network with the convolutional layers
+        return network
+
+
+class GlobalQNNQuantumToClassical(KohnShamNetwork):
+    """Convolutional Quantum Neural Network.
+
+    This model applies a series of quantum convolutional layers to process
+    the input density, reducing the dimension at each step according to
+    kernel widths determined by the input dimension.
+    """
+
+    def __init__(self, config_dict: dict | None = None):
+        """Initialize from config dictionary."""
+        super().__init__(config_dict)
+        self.config = {
+            "network_type": "conv_dqc",
+            "wrap_self_interaction": False,
+            "wrap_with_negative_transform": False,
+            "use_amplitude_encoding": False,  # This model uses global encoding
+            "n_qubits": 6,
+            "n_var_layers": 2,
+            "largest_kernel_width": 3,
+            "max_number_conv_layers": 100,
+            "list_qubits_per_layer": [],
+            "force_qubits_per_layer_is_kernel_width": False,
+            "normalization": 1.0,
+            "last_layer_type": "dense",  # "dense" or "mlp"
+            "use_bias_mlp": False,
+            "last_layer_features": [1],
+            "n_features": 3,
+        }
+        if config_dict is not None:
+            self.config.update(config_dict)
+
+    def build_network(
+        self,
+        grids: jnp.ndarray,
+        noise: NoiseProtocol | None = None,
+    ) -> tuple[Callable, Callable]:
+        """Build the convolutional quantum neural network.
+
+        Args:
+            grids: Grid points for the density functional calculations.
+
+        Returns:
+            tuple: (init_fn, apply_fn) pair of network initialization and application functions.
+        """
+        from qedft.models.quantum.convolutional_models import build_conv_qnn_quantum_to_classical
+
+        # Get the input dimension from the grid size
+        input_dimension = grids.shape[0]
+
+        # Construct the full convolutional model
+        network = build_conv_qnn_quantum_to_classical(
+            n_qubits=self.config.get("n_qubits", 6),
+            n_var_layers=self.config.get("n_var_layers", 2),
+            n_out=1,  # NOTE: not used in this model
+            input_dimension=input_dimension,
+            normalization=self.config.get("normalization", 1.0),
+            use_bias_mlp=self.config.get("use_bias_mlp", False),
+            noise=noise,
+            diff_mode=self.config.get("diff_mode", DiffMode.AD),
+            n_shots=self.config.get("n_shots", 0),
+            key=self.config.get("key", jax.random.PRNGKey(0)),
+            n_features=self.config.get("n_features", 3),
+        )
+
+        # Build the full network with the convolutional layers
+        return network
+
+
+# ================================================================
+# Quantum Inspired models
+# ================================================================
 
 class GlobalQiCQNN(KohnShamNetwork):
     """Convolutional Quantum Neural Network where QNNs use amplitude encoding for data.
@@ -533,7 +777,7 @@ class GlobalQiQNN(KohnShamNetwork):
 
 
 # ================================================================
-# Additional models
+# Additional models for paper proofs
 # ================================================================
 
 
@@ -610,6 +854,11 @@ if __name__ == "__main__":
 
     # Create different QNN models
     models = {
+        "GlobalQNNQuantumToClassical": GlobalQNNQuantumToClassical(config_dict={"n_qubits": 4, "n_features": 2}),
+        "GlobalQNNClassicalToQuantum": GlobalQNNClassicalToQuantum(config_dict={"n_qubits": 6}),
+        "GlobalQNNReverse": GlobalQNNReverse(
+            config_dict={"n_qubits": 6},
+        ),
         "DirectQNN": LocalQNN(config_dict={"qnn_type": "LocalQNN", "layer_type": "DirectQNN"}),
         "ChebyshevQNN": LocalQNN(
             config_dict={"qnn_type": "LocalQNN", "layer_type": "ChebyshevQNN"},
@@ -624,7 +873,7 @@ if __name__ == "__main__":
     }
 
     # Setup test data
-    num_points = 9
+    num_points = 14
     density = jnp.linspace(0, 1, num_points)
     print(f"Density shape: {density.shape}")
     grids = jnp.ones(density.shape)
@@ -634,6 +883,7 @@ if __name__ == "__main__":
     # Test each model
     results = {}
     for name, model in models.items():
+        print(f"Building {name}...")
         # Build network
         init_fn, apply_fn = model.build_network(grids)
 

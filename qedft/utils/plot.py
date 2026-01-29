@@ -295,6 +295,54 @@ class PlotStyle:
         )
 
 
+def set_plot_style(
+    palette_name="plasma_r",
+    palette_size=10,
+    font_size_medium=12,
+    font_size_large=13,
+    use_tex=False,
+):
+    """Apply global plot style settings.
+
+    This is a convenience function that creates a PlotStyle instance
+    and applies its settings globally to matplotlib. Use this at the
+    beginning of your script to set consistent styling without
+    modifying existing plotting code.
+
+    Parameters
+    ----------
+    palette_name : str
+        Name of the seaborn color palette
+    palette_size : int
+        Number of colors in the palette
+    font_size_medium : int
+        Standard font size for labels, ticks
+    font_size_large : int
+        Font size for titles
+    use_tex : bool
+        Whether to use LaTeX rendering
+
+    Returns
+    -------
+    PlotStyle
+        The PlotStyle instance with the applied settings
+
+    Examples
+    --------
+    >>> from qedft.utils.plot import set_plot_style
+    >>> set_plot_style(palette_name="viridis", font_size_medium=14)
+    >>> # Now all your matplotlib plots will use this style
+    """
+    style = PlotStyle(
+        palette_name=palette_name,
+        palette_size=palette_size,
+        font_size_medium=font_size_medium,
+        font_size_large=font_size_large,
+        use_tex=use_tex,
+    )
+    return style
+
+
 if __name__ == "__main__":
 
     # Same as paper

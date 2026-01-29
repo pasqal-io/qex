@@ -1,7 +1,7 @@
 # General experiment settings
 name: test
 experiment_name: test
-network_type: ksr                    # mlp, dqc, adqc, gadqc, ksr, mlp_ksr, conv_dqc, dqc_tfm, gadqc_with_mlp
+network_type: conv_dqc                        # mlp, dqc, adqc, gadqc, ksr, mlp_ksr, conv_dqc, dqc_tfm, gadqc_with_mlp
 molecule_name: h2
 molecule_names: [h2]               # h2, h2_h2, h4, h2_plus allowed
 dataset1: [128, 384]                       # Dataset dimensions
@@ -51,10 +51,10 @@ alpha_decay: 0.9                          # Decay rate for mixing parameter
 num_mixing_iterations: 1                  # Number of density mixing iterations
 density_mse_converge_tolerance: -1.0      # Convergence tolerance (-1 = disabled)
 stop_gradient_step: -1                    # When to stop gradient (-1 = never)
-enforce_reflection_symmetry: true        # Enforce reflection symmetry
+enforce_reflection_symmetry: false        # Enforce reflection symmetry
 use_relative_encoding: false              # Use relative position encoding
 num_grids: 513                            # Number of spatial grid points
-use_amplitude_encoding: false              # Whether to use amplitude encoding
+use_amplitude_encoding: true             # Whether to use amplitude encoding
 
 # QConv settings
 max_number_conv_layers: 100               # Maximum number of convolutional layers
