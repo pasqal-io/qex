@@ -19,12 +19,12 @@ from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 from jax import config, random
 from jax_dft import np_utils
 
-import qedft
-from qedft.config.config import Config
-from qedft.data_io.dataset_loader import load_molecular_datasets_from_config
-from qedft.models.networks import GlobalQNNClassicalToQuantum, GlobalQNNQuantumToClassical
-from qedft.models.wrappers import wrap_network_from_config
-from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
+import qex
+from qex.config.config import Config
+from qex.data_io.dataset_loader import load_molecular_datasets_from_config
+from qex.models.networks import GlobalQNNClassicalToQuantum, GlobalQNNQuantumToClassical
+from qex.models.wrappers import wrap_network_from_config
+from qex.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
 
 # Set the default dtype as float64
 config.update("jax_enable_x64", True)
@@ -32,7 +32,7 @@ config.update("jax_enable_x64", True)
 config.update("jax_platform_name", "cuda")  # "cuda" or "cpu"
 
 # Get the project path
-project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
+project_path = Path(os.path.dirname(os.path.dirname(qex.__file__)))
 print(f"Project path: {project_path}")
 
 
@@ -407,7 +407,7 @@ if __name__ == "__main__":
 
     # Load configuration
     config_path = str(
-        project_path / "qedft" / "config" / "train_config.yaml",
+        project_path / "qex" / "config" / "train_config.yaml",
     )
     config = Config(config_path=config_path)
     config_dict = config.config

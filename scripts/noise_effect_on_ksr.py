@@ -17,12 +17,12 @@ import scipy
 from jax import config, random
 from jax_dft import np_utils
 
-from qedft.config.config import Config
-from qedft.data_io.dataset_loader import load_molecular_datasets_from_config
-from qedft.models.classical.classical_models import build_global_mlp, build_local_mlp
-from qedft.models.classical.global_ksr_model import create_ksr_model_from_config
-from qedft.models.wrappers import wrap_network_from_config
-from qedft.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
+from qex.config.config import Config
+from qex.data_io.dataset_loader import load_molecular_datasets_from_config
+from qex.models.classical.classical_models import build_global_mlp, build_local_mlp
+from qex.models.classical.global_ksr_model import create_ksr_model_from_config
+from qex.models.wrappers import wrap_network_from_config
+from qex.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
 
 # Set the default dtype as float64
 config.update("jax_enable_x64", True)
@@ -37,10 +37,10 @@ except Exception as e:
     print("Using CPU")
 
 # Get the project path
-import qedft
+import qex
 
 # Get the project path
-project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
+project_path = Path(os.path.dirname(os.path.dirname(qex.__file__)))
 print(f"Project path: {project_path}")
 
 
@@ -239,7 +239,7 @@ def plot_results(results):
 
 if __name__ == "__main__":
     # Load configuration
-    config = Config(config_path=project_path / "qedft" / "config" / "train_config.yaml")
+    config = Config(config_path=project_path / "qex" / "config" / "train_config.yaml")
     config_dict = config.config
 
     # Set model type - can be changed to test different models

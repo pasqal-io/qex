@@ -16,7 +16,7 @@ from horqrux.primitives import X
 from horqrux.utils import random_state
 from horqrux.utils.operator_utils import TargetQubits
 
-from qedft.models.quantum.feature_maps import chebyshev, direct, product
+from qex.models.quantum.feature_maps import chebyshev, direct, product
 
 
 class TestFeatureMaps:

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A quantum-enhanced implementation of Kohn-Sham Density Functional Theory (KS-DFT) in JAX, building upon the following packages:"
 authors = ["Igor Sokolov <igor.sokolov@pasqal.com>"]
 readme = "README.md"
-packages = [{include = "qedft"}]
+packages = [{include = "qex"}]
 
 
 [tool.poetry.dependencies]

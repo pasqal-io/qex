@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from jax_dft import datasets
 
-from qedft.data_io.dataset_loader import (
+from qex.data_io.dataset_loader import (
     load_molecular_datasets,
     load_molecular_datasets_from_config,
 )

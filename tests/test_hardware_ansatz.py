@@ -7,7 +7,7 @@ from horqrux.apply import apply_gates
 from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 from horqrux.primitives.parametric import RX, RY, RZ
 
-from qedft.models.quantum.hardware_ansatz import advanced_hea, hea, hea_legacy
+from qex.models.quantum.hardware_ansatz import advanced_hea, hea, hea_legacy
 
 
 @pytest.fixture

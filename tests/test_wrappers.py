@@ -17,8 +17,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from qedft.models.classical.classical_models import build_global_mlp, build_local_mlp
-from qedft.models.wrappers import neural_xc_functional, wrap_network
+from qex.models.classical.classical_models import build_global_mlp, build_local_mlp
+from qex.models.wrappers import neural_xc_functional, wrap_network
 
 
 def setup_test_network(network_type="global"):

@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from qedft.models.classical.classical_models import (
+from qex.models.classical.classical_models import (
     build_batched_global_mlp,
     build_global_mlp,
     build_local_mlp,

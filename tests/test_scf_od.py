@@ -14,7 +14,7 @@ from absl.testing import parameterized
 from jax import config, tree_util
 from jax_dft import utils
 
-from qedft.train.od import scf as scf_od
+from qex.train.od import scf as scf_od
 
 # Enable double precision
 config.update("jax_enable_x64", True)

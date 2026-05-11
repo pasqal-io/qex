@@ -9,7 +9,7 @@ import pytest
 from horqrux import zero_state
 from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 
-from qedft.models.quantum.entangling_layers import (
+from qex.models.quantum.entangling_layers import (
     entangling_layer,
     entangling_ops,
     get_entangler_map,

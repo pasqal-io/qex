@@ -20,7 +20,7 @@ from horqrux.primitives.primitive import NOT
 from horqrux.utils.operator_utils import density_mat
 from jax.experimental import checkify
 
-from qedft.models.quantum.measurement import qubit_magnetization, total_magnetization
+from qex.models.quantum.measurement import qubit_magnetization, total_magnetization
 
 # Constants used across tests
 N_QUBITS = 2

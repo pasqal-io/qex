@@ -14,7 +14,7 @@ from pyscf.dft.xcfun import define_xc_
 from pyscfad import dft as addft
 from pyscfad import gto as adgto
 
-from qedft.train.td.numint_legacy import NumInt
+from qex.train.td.numint_legacy import NumInt
 
 
 def test_standard_xc():

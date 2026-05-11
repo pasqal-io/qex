@@ -17,7 +17,7 @@ import tempfile
 import pytest
 import yaml
 
-from qedft.config.config import Config, setup_config
+from qex.config.config import Config, setup_config
 
 
 @pytest.fixture

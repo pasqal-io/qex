@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-import qedft
-from qedft.config.config import Config
+import qex
+from qex.config.config import Config
 
 
 @pytest.fixture
@@ -127,7 +127,7 @@ def test_load_json_config():
     """
     # Get the absolute path to the config file
     # Default configuration file path relative to the project root
-    project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
+    project_path = Path(os.path.dirname(os.path.dirname(qex.__file__)))
     config_path = project_path / "tests" / "test_files" / "test_json.json"
 
     # Load the JSON file

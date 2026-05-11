@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from qedft.models.quantum.quantum_models import amplitude_encode
+from qex.models.quantum.quantum_models import amplitude_encode
 
 
 @pytest.mark.parametrize(
