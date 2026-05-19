@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import pytest
 from jax import random
 
-from qedft.models.classical.classical_models import build_local_mlp
-from qedft.train.td.xc import eval_xc_custom, exc_and_vrho_custom
+from qex.models.classical.classical_models import build_local_mlp
+from qex.train.td.xc import eval_xc_custom, exc_and_vrho_custom
 
 
 @pytest.fixture

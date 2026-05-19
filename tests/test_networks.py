@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 from horqrux.utils.operator_utils import DiffMode
 
-from qedft.models.networks import (
+from qex.models.networks import (
     BatchedGlobalMLP,
     GlobalMLP,
     GlobalQiCQNN,

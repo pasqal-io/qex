@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import pytest
 from jax import random
 
-from qedft.train.td.generalized_eigensolver import generalized_eigh
-from qedft.train.td.generalized_eigensolver_masked import masked_generalized_eigh
+from qex.train.td.generalized_eigensolver import generalized_eigh
+from qex.train.td.generalized_eigensolver_masked import masked_generalized_eigh
 
 # Enable double precision
 jax.config.update("jax_enable_x64", True)

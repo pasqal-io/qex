@@ -8,7 +8,7 @@ from unittest.mock import patch
 import jax.numpy as jnp
 import pytest
 
-from qedft.train.od import eval
+from qex.train.od import eval
 
 
 class TestDataset:
@@ -69,7 +69,7 @@ def test_load_model_params():
     assert jnp.array_equal(loaded_params["weights"], test_params["weights"])
 
 
-@patch("qedft.train.od.eval.kohn_sham")
+@patch("qex.train.od.eval.kohn_sham")
 def test_get_states(mock_kohn_sham, mock_params):
     """Test getting states for different distances."""
     # Setup
@@ -103,8 +103,8 @@ def test_get_states(mock_kohn_sham, mock_params):
     assert states["total_energy"].shape == (3,)
 
 
-@patch("qedft.train.od.eval.get_states")
-@patch("qedft.train.od.eval.kohn_sham")
+@patch("qex.train.od.eval.get_states")
+@patch("qex.train.od.eval.kohn_sham")
 def test_eval_trained_model(
     mock_kohn_sham,
     mock_get_states,
@@ -146,7 +146,7 @@ def test_eval_trained_model(
 
 def test_kohn_sham_with_amplitude_encoding(mock_params, mock_grids, mock_neural_xc_fn):
     """Test Kohn-Sham calculation with amplitude encoding."""
-    with patch("qedft.train.od.scf.kohn_sham_amplitude_encoded") as mock_ks_amp:
+    with patch("qex.train.od.scf.kohn_sham_amplitude_encoded") as mock_ks_amp:
         mock_ks_amp.return_value = {"density": jnp.ones(100), "total_energy": -1.0}
 
         result = eval.kohn_sham(
@@ -167,7 +167,7 @@ def test_kohn_sham_with_amplitude_encoding(mock_params, mock_grids, mock_neural_
 
 def test_kohn_sham_without_amplitude_encoding(mock_params, mock_grids, mock_neural_xc_fn):
     """Test Kohn-Sham calculation without amplitude encoding."""
-    with patch("qedft.train.od.eval.scf_jax_dft.kohn_sham") as mock_ks:
+    with patch("qex.train.od.eval.scf_jax_dft.kohn_sham") as mock_ks:
         mock_ks.return_value = {"density": jnp.ones(100), "total_energy": -1.0}
 
         result = eval.kohn_sham(

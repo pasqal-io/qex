@@ -8,7 +8,7 @@ import jax.random
 import numpy as np
 import pytest
 
-from qedft.train.od.trainer import KSDFTTrainer
+from qex.train.od.trainer import KSDFTTrainer
 
 
 @pytest.fixture
@@ -64,8 +64,8 @@ def mock_dataset():
     return dataset
 
 
-@patch("qedft.train.od.trainer.load_molecular_datasets_from_config")
-@patch("qedft.train.od.trainer.scf.get_initial_density")
+@patch("qex.train.od.trainer.load_molecular_datasets_from_config")
+@patch("qex.train.od.trainer.scf.get_initial_density")
 def test_prepare_dataset(
     mock_get_density,
     mock_load_datasets,
@@ -96,9 +96,9 @@ def test_prepare_dataset(
         assert np.array_equal(grids, mock_dataset.grids)
 
 
-@patch("qedft.train.od.trainer.scipy.optimize.fmin_l_bfgs_b")
-@patch("qedft.train.od.trainer.create_training_step")
-@patch("qedft.train.od.trainer.build_xc_functional")
+@patch("qex.train.od.trainer.scipy.optimize.fmin_l_bfgs_b")
+@patch("qex.train.od.trainer.create_training_step")
+@patch("qex.train.od.trainer.build_xc_functional")
 def test_train(
     mock_build_xc,
     mock_create_training_step,
@@ -147,7 +147,7 @@ def test_train(
 
 
 def test_main():
-    with patch("qedft.train.od.trainer.KSDFTTrainer") as MockTrainer:
+    with patch("qex.train.od.trainer.KSDFTTrainer") as MockTrainer:
         # Mock the trainer's train method
         mock_trainer_instance = Mock()
         mock_trainer_instance.train.return_value = (
@@ -158,7 +158,7 @@ def test_main():
         MockTrainer.return_value = mock_trainer_instance
 
         # Import and run main
-        from qedft.train.od.trainer import main
+        from qex.train.od.trainer import main
 
         main()
 

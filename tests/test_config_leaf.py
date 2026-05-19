@@ -12,7 +12,7 @@ throughout the codebase.
 
 import pytest
 
-from qedft.config.config import Config
+from qex.config.config import Config
 
 
 def test_get_leaf_config():

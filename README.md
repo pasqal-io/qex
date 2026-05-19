@@ -1,5 +1,5 @@
 <p align="center">
-<img src="img/logo-qedft.png" alt="drawing" style="width:500px;" class="img-fluid"/>
+<img src="img/logo-qex.png" alt="drawing" style="width:500px;" class="img-fluid"/>
 </p>
 
 # Quantum-Enhanced Density Functional Theory in JAX (QEX)
@@ -58,11 +58,9 @@ Clone the repository and then navigate to it and install the dependencies:
 python -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies from requirements file
-pip install -r requirements.txt
-
 # Install the local package in editable mode
 pip install -e .
+# Warning: jax_dft package it will be downloaded (might need to redo this cmd if it times out).
 ```
 
 For GPU acceleration, install instead the version of JAX with GPU support, e.g.:
@@ -83,19 +81,19 @@ The user can define their own network by inheriting from the `KohnShamNetwork`, 
 
 ```python
 import os
-import qedft
-from qedft.models.networks import LocalMLP, LocalQNN
-from qedft.config.config import Config
+import qex
+from qex.models.networks import LocalMLP, LocalQNN
+from qex.config.config import Config
 from pathlib import Path
-from qedft.train.od.trainer import KSDFTTrainer
+from qex.train.od.trainer import KSDFTTrainer
 from loguru import logger
 
 
 # Get project path
-project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
+project_path = Path(os.path.dirname(os.path.dirname(qex.__file__)))
 
 # Load base configuration
-config = Config(config_path=project_path / 'qedft' / 'config' / 'train_config.yaml').config
+config = Config(config_path=project_path / 'qex' / 'config' / 'train_config.yaml').config
 
 # The network object has the function `build_network` that returns (init_fn, apply_fn),
 # init_fn takes a PRNGKey and input_shape and returns initial parameters,
@@ -115,7 +113,7 @@ params, loss, info = trainer.train(
     checkpoint_save_dir=project_path / 'tests' / 'ckpts'
 )
 ```
-*(Note: See also `qedft/train/od/train.py` for the 1D training script)*
+*(Note: See also `qex/train/od/train.py` for the 1D training script)*
 
 ### Training XC Model in the 3D Kohn-Sham DFT Framework
 
@@ -123,19 +121,19 @@ Similarly, this command runs the example training script for KS-DFT in 3D, for t
 
 ```python
 import os
-import qedft
-from qedft.models.networks import GlobalMLP
-from qedft.config.config import Config
+import qex
+from qex.models.networks import GlobalMLP
+from qex.config.config import Config
 from pathlib import Path
 import jax.numpy as jnp
-from qedft.train.td.trainer_legacy_no_jit import TDKSDFTTrainer
-from qedft.models.networks import GlobalMLP
-from qedft.train.td.stax_to_flax_network import adapt_stax_for_training
+from qex.train.td.trainer_legacy_no_jit import TDKSDFTTrainer
+from qex.models.networks import GlobalMLP
+from qex.train.td.stax_to_flax_network import adapt_stax_for_training
 from loguru import logger
 
 
 # Get project path
-project_path = Path(os.path.dirname(os.path.dirname(qedft.__file__)))
+project_path = Path(os.path.dirname(os.path.dirname(qex.__file__)))
 
 
 # Create H2 bonds example
@@ -162,7 +160,7 @@ logger.info(f"Network initialized with {num_grid_points} grid points")
 trainer = TDKSDFTTrainer(config, network=network)
 params, opt_state, train_losses, val_losses, val_iters = trainer.train()
 ```
-*(Note: See also `qedft/train/td/train_legacy_no_jit.py` for the 3D training script)*
+*(Note: See also `qex/train/td/train_legacy_no_jit.py` for the 3D training script)*
 
 These scripts will typically:
 1. Generate or load training/testing/validation data.

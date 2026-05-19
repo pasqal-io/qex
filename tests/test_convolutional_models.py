@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 
-from qedft.models.quantum.convolutional_models import (
+from qex.models.quantum.convolutional_models import (
     build_conv_amplitude_encoding_qnn,
     build_conv_mlp,
     build_conv_qnn,

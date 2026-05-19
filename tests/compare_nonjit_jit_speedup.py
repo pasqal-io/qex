@@ -9,9 +9,9 @@ import numpy as np
 from horqrux.utils import random_state
 from tqdm import tqdm
 
-from qedft.models.quantum.feature_maps import chebyshev_gates
-from qedft.models.quantum.quantum_models import QNN
-from qedft.models.quantum.variational_ansatz import hea
+from qex.models.quantum.feature_maps import chebyshev_gates
+from qex.models.quantum.quantum_models import QNN
+from qex.models.quantum.variational_ansatz import hea
 
 
 def test_jit_speedup(n_runs=100):
