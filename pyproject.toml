@@ -1,10 +1,21 @@
 [tool.poetry]
-name = "QEX"
+name = "pasqal-qex"
 version = "0.1.0"
-description = "A quantum-enhanced implementation of Kohn-Sham Density Functional Theory (KS-DFT) in JAX, building upon the following packages:"
+description = "A quantum-enhanced implementation of Kohn-Sham Density Functional Theory (KS-DFT) in JAX."
 authors = ["Igor Sokolov <igor.sokolov@pasqal.com>"]
 readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/pasqal-io/qex"
+repository = "https://github.com/pasqal-io/qex"
 packages = [{include = "qex"}]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 
 
 [tool.poetry.dependencies]
@@ -18,10 +29,8 @@ numpy = "^2.2.6"
 matplotlib = "^3.10.3"
 loguru = "^0.7.3"
 horqrux = "^0.9.2"
-jax_dft = {git = "https://github.com/google-research/google-research.git", rev = "c27ed001a50cf23f8db4d8ab4c537a36a72982de", subdirectory = "jax_dft"}
 ipykernel = "^6.29.5"
 seaborn = "^0.13.2"
-pytest = "^9.0.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.2"
@@ -29,6 +38,7 @@ pytest-cov = "^6.1.1"
 taskipy = "^1.14.1"
 black = "^25.1.0"
 isort = "^6.0.1"
+jax_dft = {git = "https://github.com/google-research/google-research.git", rev = "c27ed001a50cf23f8db4d8ab4c537a36a72982de", subdirectory = "jax_dft"}
 
 [tool.isort]
 profile = "black"

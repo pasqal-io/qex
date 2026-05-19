@@ -60,7 +60,7 @@ source .venv/bin/activate
 
 # Install the local package in editable mode
 pip install -e .
-# Be aware that the jax_dft package it will pull, will need some time to download (might need to relaunch if times out), do not worry.
+# Warning: jax_dft package it will be downloaded (might need to redo this cmd if it times out).
 ```
 
 For GPU acceleration, install instead the version of JAX with GPU support, e.g.:
