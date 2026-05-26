@@ -82,7 +82,7 @@ The user can define their own network by inheriting from the `KohnShamNetwork`, 
 ```python
 import os
 import qex
-from qex.models.networks import LocalMLP, LocalQNN
+from qex.legacy.models.networks import LocalMLP, LocalQNN
 from qex.config.config import Config
 from pathlib import Path
 from qex.legacy.od.train.trainer import KSDFTTrainer
@@ -122,13 +122,13 @@ Similarly, this command runs the example training script for KS-DFT in 3D, for t
 ```python
 import os
 import qex
-from qex.models.networks import GlobalMLP
+from qex.legacy.models.networks import GlobalMLP
 from qex.config.config import Config
 from pathlib import Path
 import jax.numpy as jnp
-from qex.train.td.trainer_legacy_no_jit import TDKSDFTTrainer
-from qex.models.networks import GlobalMLP
-from qex.train.td.stax_to_flax_network import adapt_stax_for_training
+from qex.legacy.td.train.trainer_legacy_no_jit import TDKSDFTTrainer
+from qex.legacy.models.networks import GlobalMLP
+from qex.legacy.td.train.stax_to_flax_network import adapt_stax_for_training
 from loguru import logger
 
 

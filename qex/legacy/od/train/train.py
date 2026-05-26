@@ -480,8 +480,8 @@ if __name__ == "__main__":
 
     import qex
     from qex.config.config import Config
-    from qex.legacy.od.dataset_loader import load_molecular_datasets_from_config
-    from qex.legacy.od.global_ksr_model import create_ksr_model_from_config
+    from qex.legacy.od.data_io.dataset_loader import load_molecular_datasets_from_config
+    from qex.legacy.models.classical.global_ksr_model import create_ksr_model_from_config
 
     # Set up JAX to use 64-bit precision
     # NaNs in loss if not using 64-bit precision

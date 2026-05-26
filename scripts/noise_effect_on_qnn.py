@@ -21,9 +21,9 @@ from jax_dft import np_utils
 
 import qex
 from qex.config.config import Config
-from qex.legacy.od.dataset_loader import load_molecular_datasets_from_config
-from qex.models.networks import GlobalQNNClassicalToQuantum, GlobalQNNQuantumToClassical
-from qex.legacy.od.wrappers import wrap_network_from_config
+from qex.legacy.od.data_io.dataset_loader import load_molecular_datasets_from_config
+from qex.legacy.models.networks import GlobalQNNClassicalToQuantum, GlobalQNNQuantumToClassical
+from qex.legacy.models.wrappers import wrap_network_from_config
 from qex.legacy.od.train.train import create_kohn_sham_fn, create_loss_fn, create_training_step
 
 # Set the default dtype as float64
