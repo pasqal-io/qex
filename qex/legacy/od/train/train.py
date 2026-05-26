@@ -17,8 +17,8 @@ from jax_dft import jit_scf, losses, np_utils, utils
 from jax_dft.scf import KohnShamState
 from loguru import logger
 
-from qex.train.od import jit_scf as jit_scf_od
-from qex.train.od import losses_no_jit
+from qex.legacy.od.train import jit_scf as jit_scf_od
+from qex.legacy.od.train import losses_no_jit
 
 
 def get_training_config(override_config: dict = None) -> dict:
@@ -214,7 +214,7 @@ def create_kohn_sham_fn_non_jit(
         # Import the non-JIT versions
         from jax_dft import scf
 
-        from qex.train.od import scf as scf_od
+        from qex.legacy.od.train import scf as scf_od
 
         kohn_sham_func = (
             scf_od.kohn_sham_amplitude_encoded_no_jit
@@ -480,8 +480,8 @@ if __name__ == "__main__":
 
     import qex
     from qex.config.config import Config
-    from qex.data_io.dataset_loader import load_molecular_datasets_from_config
-    from qex.models.classical.global_ksr_model import create_ksr_model_from_config
+    from qex.legacy.od.dataset_loader import load_molecular_datasets_from_config
+    from qex.legacy.od.global_ksr_model import create_ksr_model_from_config
 
     # Set up JAX to use 64-bit precision
     # NaNs in loss if not using 64-bit precision

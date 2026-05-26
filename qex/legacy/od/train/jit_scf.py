@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 from jax_dft import jit_scf, scf, utils
 
-import qex.train.od.scf as scf_qex
+import qex.legacy.od.train.scf as scf_qex
 
 
 @functools.partial(jax.jit, static_argnums=(3, 5, 6))

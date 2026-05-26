@@ -19,7 +19,7 @@ from qex.models.networks import (
     GlobalQNNLayer,
 )
 from qex.models.utils import count_parameters
-from qex.models.wrappers import negativity_transform
+from qex.models.transforms import negativity_transform
 
 
 def add_gaussian_noise_layer(network: tuple[Callable, Callable], noise_std: float = 0.1):

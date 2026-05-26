@@ -1,3 +1,6 @@
+import pytest
+pytest.importorskip("jax_dft")
+
 """Tests for the wrappers module.
 
 This module contains tests for the wrappers module, which provides wrappers for
@@ -18,7 +21,7 @@ import jax.numpy as jnp
 import pytest
 
 from qex.models.classical.classical_models import build_global_mlp, build_local_mlp
-from qex.models.wrappers import neural_xc_functional, wrap_network
+from qex.legacy.od.wrappers import neural_xc_functional, wrap_network
 
 
 def setup_test_network(network_type="global"):

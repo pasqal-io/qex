@@ -18,9 +18,9 @@ from jax_dft import np_utils, scf
 from loguru import logger
 
 import qex
-from qex.data_io.dataset_loader import load_molecular_datasets_from_config
-from qex.models.wrappers import build_xc_functional
-from qex.train.od.train import create_kohn_sham_fn, create_loss_fn, create_training_step
+from qex.legacy.od.dataset_loader import load_molecular_datasets_from_config
+from qex.legacy.od.wrappers import build_xc_functional
+from qex.legacy.od.train.train import create_kohn_sham_fn, create_loss_fn, create_training_step
 
 
 class KSDFTTrainer:
@@ -199,7 +199,7 @@ class KSDFTTrainer:
         Returns:
             States from the Kohn-Sham calculations
         """
-        from qex.train.od.eval import eval_trained_model
+        from qex.legacy.od.train.eval import eval_trained_model
 
         dataset, _, _, grids = self.prepare_dataset()
 

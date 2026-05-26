@@ -17,7 +17,7 @@ from jax_dft import xc
 from jax_dft.utils import exponential_coulomb
 from loguru import logger
 
-from qex.train.od import scf as scf_qex
+from qex.legacy.od.train import scf as scf_qex
 
 
 def kohn_sham(

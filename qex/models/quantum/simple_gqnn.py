@@ -801,22 +801,6 @@ if __name__ == "__main__":
     print(f"Noisy result (scalar): {result_noisy}")
     print(f"Noisy result shape: {result_noisy.shape}")
 
-    # Use the wrap function to make neural XC functional
-    print("=== Testing Neural XC Functional ===")
-    from qex.models.wrappers import wrap_network
-
-    init_fn_neural_xc, apply_fn_neural_xc = wrap_network(
-        (init_fn, apply_fn),
-        x,
-        "mlp_ksr",
-        wrap_self_interaction=False,
-        wrap_with_negative_transform=False,
-    )
-    params_neural_xc = init_fn_neural_xc(key)
-    result_neural_xc = apply_fn_neural_xc(x, params_neural_xc)
-    print(f"Neural XC result (scalar): {result_neural_xc}")
-    print(f"Neural XC result shape: {result_neural_xc.shape}")
-
     # Test JIT compilation
     jitted_apply = jax.jit(apply_fn)
     result_jit = jitted_apply(params, x)
