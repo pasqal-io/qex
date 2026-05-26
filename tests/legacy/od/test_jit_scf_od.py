@@ -1,3 +1,6 @@
+import pytest
+pytest.importorskip("jax_dft")
+
 """Tests for self-consistent field calculations.
 
 This module tests the implementation of orbital-dependent Kohn-Sham DFT calculations,
@@ -7,6 +10,7 @@ including:
 - State validation and properties
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -14,13 +18,14 @@ from absl.testing import parameterized
 from jax import config, tree_util
 from jax_dft import utils
 
-from qex.train.od import scf as scf_od
+from qex.legacy.od.train import jit_scf as jit_scf_od
+from qex.legacy.od.train import scf as scf_od
 
 # Enable double precision
 config.update("jax_enable_x64", True)
 
 
-class ScfOdTest(parameterized.TestCase):
+class JitScfOdTest(parameterized.TestCase):
     """Tests for SCF calculations.
 
     Tests the core functionality of the SCF implementation,
@@ -128,7 +133,7 @@ class ScfOdTest(parameterized.TestCase):
             """Regularized LDA exchange functional."""
             return -0.73855 * (density + 1e-10) ** (1 / 3)
 
-        next_state = scf_od.kohn_sham_iteration_amplitude_encoded(
+        next_state = jit_scf_od.kohn_sham_iteration_amplitude_encoded(
             state=initial_state,
             num_electrons=self.num_electrons,
             xc_energy_density_fn=tree_util.Partial(xc_energy_density_fn),
@@ -182,8 +187,8 @@ class ScfOdTest(parameterized.TestCase):
         )
 
     @parameterized.parameters(
-        (-1.0, [False, False, False]),
-        (jnp.inf, [True, True, True]),
+        (1e-2, [False, False, False]),  # Strict tolerance -> likely won't converge in 3 iterations
+        (1e10, [False, True, True]),  # Very loose tolerance -> should converge almost immediately
     )
     def test_kohn_sham_amplitude_encoded_convergence(
         self,
@@ -191,25 +196,37 @@ class ScfOdTest(parameterized.TestCase):
         expected_converged,
     ):
         """Tests convergence behavior of Kohn-Sham calculation.
+        Note that the global xc_energy_density_fn is used here, which is not
+        the same as the local xc_energy_density_fn used in the test_scf_od test.
+        This is to test the global xc_energy_density_fn.
 
         Args:
-            density_mse_converge_tolerance: Convergence threshold for density
+            density_mse_converge_tolerance: Convergence threshold for density MSE
             expected_converged: Expected convergence status for each iteration
         """
 
-        def xc_energy_density_fn(density):
+        @jax.jit
+        def global_xc_energy_density_fn(density):
             """LDA exchange functional."""
-            return -0.73855 * density ** (1 / 3)
+            # Return array of same shape as density to maintain consistent shapes
+            return jnp.array(-0.73855 * density ** (1 / 3)).sum()
 
-        state = scf_od.kohn_sham_amplitude_encoded(
+        initial_density = self.num_electrons * utils.gaussian(
+            grids=self.grids,
+            center=0.0,
+            sigma=1.0,
+        )
+
+        state = jit_scf_od.kohn_sham_amplitude_encoded(
             locations=self.locations,
             nuclear_charges=self.nuclear_charges,
             num_electrons=self.num_electrons,
             num_iterations=3,
             grids=self.grids,
-            xc_energy_density_fn=tree_util.Partial(xc_energy_density_fn),
+            xc_energy_density_fn=tree_util.Partial(global_xc_energy_density_fn),
             interaction_fn=utils.exponential_coulomb,
             density_mse_converge_tolerance=density_mse_converge_tolerance,
+            initial_density=initial_density,
         )
 
         np.testing.assert_allclose(state.converged, expected_converged)

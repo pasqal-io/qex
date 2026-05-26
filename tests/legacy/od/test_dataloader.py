@@ -1,3 +1,6 @@
+import pytest
+pytest.importorskip("jax_dft")
+
 """Tests for dataset loading functionality.
 
 This module tests the dataset loading utilities, including:
@@ -15,7 +18,7 @@ import numpy as np
 import pytest
 from jax_dft import datasets
 
-from qex.data_io.dataset_loader import (
+from qex.legacy.od.dataset_loader import (
     load_molecular_datasets,
     load_molecular_datasets_from_config,
 )

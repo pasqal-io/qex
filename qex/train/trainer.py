@@ -121,7 +121,7 @@ class KSDFTTrainerFactory:
             ValueError: If dimension is not supported
         """
         if dimension.lower() == "od":
-            from qex.train.od.trainer import KSDFTTrainer
+            from qex.legacy.od.train.trainer import KSDFTTrainer
 
             return KSDFTTrainer(config_dict, network, data_path, seed)
         elif dimension.lower() == "td":

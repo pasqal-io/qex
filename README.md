@@ -85,7 +85,7 @@ import qex
 from qex.models.networks import LocalMLP, LocalQNN
 from qex.config.config import Config
 from pathlib import Path
-from qex.train.od.trainer import KSDFTTrainer
+from qex.legacy.od.train.trainer import KSDFTTrainer
 from loguru import logger
 
 

@@ -1,3 +1,6 @@
+import pytest
+pytest.importorskip("jax_dft")
+
 """Tests for the Kohn-Sham Response (KSR) model using pytest."""
 
 import jax
@@ -6,7 +9,7 @@ import jax.random as random
 import numpy as np
 import pytest
 
-from qex.models.classical.global_ksr_model import create_ksr_model_from_config
+from qex.legacy.od.global_ksr_model import create_ksr_model_from_config
 
 
 @pytest.fixture
