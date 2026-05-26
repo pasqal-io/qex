@@ -11,7 +11,7 @@ import pytest
 from pyscf import gto, scf
 
 # Import the jax_eig function from hf_legacy.py
-from qex.train.dev.utils.generalized_eigensolver import jax_eig, standard_eig
+from qex.linalg.generalized_eigensolver import jax_eig, standard_eig
 
 # Enable double precision
 jax.config.update("jax_enable_x64", True)

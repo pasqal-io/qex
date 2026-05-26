@@ -1,0 +1,62 @@
+"""SCF operators: effective potential, total energy, AO values, occupations, density matrices."""
+
+from collections.abc import Callable
+
+import jax.numpy as jnp
+from chex import Array
+
+
+def get_veff(
+    dm: Array,
+    eri: Array,
+    ao_grid: Array,
+    grid_weights: Array,
+    params: dict,
+    xc_eval_fn: Callable,
+) -> tuple[Array, Array, Array]:
+    """Effective KS potential: Coulomb + XC contributions.
+
+    Returns (Vhf=J+Vxc, exc_energy, J).
+    """
+    J = jnp.einsum("ijkl,kl->ij", eri, dm)
+
+    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
+    exc, (vrho, _, _, _), _, _ = xc_eval_fn("", rho, params=params)
+    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid)
+
+    return J + Vxc, jnp.sum(exc * rho * grid_weights), J
+
+
+def energy_tot(dm: Array, h1e: Array, J: Array, exc_energy: Array, energy_nuc: float) -> Array:
+    """KS total energy: one-electron + Hartree + XC + nuclear."""
+    e_one = jnp.einsum("ij,ji->", dm, h1e)
+    e_hartree = 0.5 * jnp.einsum("ij,ij->", dm, J)
+    return e_one + e_hartree + exc_energy + energy_nuc
+
+
+def get_ao_value(mol, coords: Array) -> Array:
+    """Evaluate AO basis on a grid (PySCF mole helper)."""
+    deriv = 0
+    feval = "GTOval_cart_deriv%d" % deriv if mol.cart else "GTOval_sph_deriv%d" % deriv
+    return mol.eval_gto(feval, coords)
+
+
+def get_occ(nelectron: int, mo_energy: Array) -> Array:
+    """Integer aufbau occupation (closed-shell): 2 in lowest n/2 MOs, 0 elsewhere."""
+    e_idx = jnp.argsort(mo_energy)
+    nocc = nelectron // 2
+
+    idx = jnp.arange(mo_energy.shape[0])
+    mo_occ = jnp.where(idx < nocc, 2.0, 0.0)
+    return mo_occ[jnp.argsort(e_idx)]
+
+
+def make_rdm1(mo_coeff: Array, mo_occ: Array) -> Array:
+    """1-RDM from MO coefficients and integer occupations."""
+    return jnp.einsum("ij,j,kj->ik", mo_coeff, mo_occ, mo_coeff)
+
+
+def make_rdm1_custom(mo_coeff: Array, mo_occ: Array) -> Array:
+    """1-RDM allowing fractional occupations (dm = C·diag(occ)·C^T)."""
+    weighted_mo = mo_coeff * jnp.sqrt(mo_occ)
+    return jnp.dot(weighted_mo, weighted_mo.T)

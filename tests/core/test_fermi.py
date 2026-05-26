@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from qex.train.dev.utils.fermi import (
+from qex.scf.fermi import (
     get_fractional_occupations,
     get_fractional_occupations_jax,
     get_fractional_occupations_jax_stable,

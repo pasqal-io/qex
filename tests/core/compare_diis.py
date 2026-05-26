@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 from pyscf import gto, lib, scf
 
-from qex.train.dev.utils.jax_diis import apply_diis, initialize_diis
+from qex.scf.jax_diis import apply_diis, initialize_diis
 
 
 def run_pyscf_diis() -> list[float]:

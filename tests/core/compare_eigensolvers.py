@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pyscf import gto, scf
 
-from qex.train.dev.utils.generalized_eigensolver import jax_eig, standard_eig
+from qex.linalg.generalized_eigensolver import jax_eig, standard_eig
 
 # Enable double precision
 jax.config.update("jax_enable_x64", True)
