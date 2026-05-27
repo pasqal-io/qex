@@ -11,8 +11,9 @@ import optax
 from jax import random
 
 from qex.data_io.dataset_generation import DataGenerator, MoleculeConfig
-from qex.functionals.mlp import MLP
-from qex.functionals.xc import make_eval_xc
+from qex.functionals.descriptor import DescriptorXC
+from qex.functionals.mlp import GlobalMLP, LocalMLP
+from qex.functionals.xc import make_eval_xc_global, make_eval_xc_local
 from qex.legacy.td.train import patch_pyscfad
 from qex.scf.operators import get_ao_value
 from qex.scf.rks import rks_energy, rks_loss
@@ -28,13 +29,12 @@ jax.config.update("jax_enable_x64", True)
 
 CONFIG = {
     "rng": 42,
-    "hidden_layers": [128, 128, 128, 128, 128],
     "method": "ccsd",
     "basis": "631g",
     "units": "Ang",
     "grid_density": 0,
     "learning_rate": 1e-4,
-    "n_iterations": 300,
+    "n_iterations": 1000,
     "energy_weight": 1.0,
     "density_weight": 1.0,
     "max_cycle": 15,
@@ -53,6 +53,22 @@ CONFIG = {
     "output_dir": "results/h2_dissociation",
     "grad_clip": 0.5,
     "exp_model": "density",
+    # "local": network outputs exc(r) per electron at each grid point
+    #          (LDA-style; E_xc assembled outside as Σ exc·rho·w).
+    # "global": network outputs the scalar E_xc[ρ] directly (already integrated).
+    "encoding": "global",
+    "n_grid": 1240,  # only used to size GlobalMLP's first Dense layer
+    # "mlp" (LocalMLP for local / GlobalMLP for global) or "descriptor"
+    # (DescriptorXC — only valid with encoding="global"; grid-size invariant).
+    "model": "descriptor",
+    "n_atom": 2,
+    # Global: [128, 128, 128, 128, 128]
+    # Local: [32, 32]
+    "hidden_layers": [32, 32],
+    # Descriptor
+    "descriptor_alphas": (0.5, 1.0, 2.0, 4.0),
+    "descriptor_scale": 1.0,
+    "descriptor_rho_floor": 1e-10,
 }
 
 jax.config.update("jax_platform_name", CONFIG["platform"])
@@ -71,6 +87,7 @@ def _h2_molecule_config(bond_length, *, method, basis, units, grid_density):
 
 def _scf_kwargs():
     return dict(
+        encoding=CONFIG["encoding"],
         max_cycle=CONFIG["max_cycle"],
         diis_max_vec=CONFIG["diis_max_vec"],
         diis_min_vec=CONFIG["diis_min_vec"],
@@ -87,9 +104,36 @@ def _scf_kwargs():
 
 if __name__ == "__main__":
 
-    network = MLP(features=CONFIG["hidden_layers"], act_fn=nn.gelu)
-    params = network.init(random.PRNGKey(CONFIG["rng"]), jnp.ones(1240))
-    xc_eval_fn = make_eval_xc(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
+    is_descriptor = CONFIG["model"] == "descriptor"
+    if is_descriptor and CONFIG["encoding"] != "global":
+        raise ValueError("DescriptorXC requires encoding='global'.")
+
+    if is_descriptor:
+        network = DescriptorXC(
+            hidden=CONFIG["hidden_layers"],
+            alphas=CONFIG["descriptor_alphas"],
+            scale=CONFIG["descriptor_scale"],
+            rho_floor=CONFIG["descriptor_rho_floor"],
+            act_fn=nn.gelu,
+        )
+        xc_eval_fn = make_eval_xc_global(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
+        params = network.init(
+            random.PRNGKey(CONFIG["rng"]),
+            jnp.ones(CONFIG["n_grid"]),
+            jnp.zeros((CONFIG["n_grid"], 3)),
+            jnp.ones(CONFIG["n_grid"]) / CONFIG["n_grid"],
+            jnp.zeros((CONFIG["n_atom"], 3)),
+        )
+    elif CONFIG["encoding"] == "local":
+        network = LocalMLP(features=CONFIG["hidden_layers"], act_fn=nn.gelu)
+        xc_eval_fn = make_eval_xc_local(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
+        params = network.init(random.PRNGKey(CONFIG["rng"]), jnp.ones(CONFIG["n_grid"]))
+    elif CONFIG["encoding"] == "global":
+        network = GlobalMLP(features=CONFIG["hidden_layers"], act_fn=nn.gelu)
+        xc_eval_fn = make_eval_xc_global(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
+        params = network.init(random.PRNGKey(CONFIG["rng"]), jnp.ones(CONFIG["n_grid"]))
+    else:
+        raise ValueError(f"Unknown encoding: {CONFIG['encoding']!r}")
 
     ccsd_bond_lengths = [0.5, 0.74, 1.0, 1.5, 2.0, 2.5, 3.0]
     print(f"Generating {len(ccsd_bond_lengths)} CCSD configurations...")
@@ -111,7 +155,7 @@ if __name__ == "__main__":
         mol, mf, dm, energy, density, coords = data_generator.generate_data(cfg)
         eri = mol.intor("int2e", aosym="s1")
         ao_grid = get_ao_value(mol, mf.grids.coords)
-        precomputed = (
+        precomputed = [
             eri,
             ao_grid,
             mf.grids.weights,
@@ -119,8 +163,11 @@ if __name__ == "__main__":
             mf.get_hcore(mol),
             mol.energy_nuc(),
             mol.nelectron,
-        )
-        training_data.append((energy, jnp.c_[coords, density], precomputed, dm))
+        ]
+        if is_descriptor:
+            precomputed.append(jnp.asarray(mf.grids.coords))
+            precomputed.append(jnp.asarray(mol.atom_coords()))
+        training_data.append((energy, jnp.c_[coords, density], tuple(precomputed), dm))
 
     optimizer = optax.adam(CONFIG["learning_rate"])
     if CONFIG["grad_clip"] is not None:
@@ -158,6 +205,7 @@ if __name__ == "__main__":
         units=CONFIG["units"],
         grid_density=CONFIG["grid_density"],
         path_results=CONFIG["output_dir"],
+        pass_descriptor_ctx=is_descriptor,
         **_scf_kwargs(),
     )
 

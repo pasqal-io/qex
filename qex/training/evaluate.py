@@ -5,6 +5,7 @@ from functools import partial
 from typing import Any
 
 import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
@@ -25,6 +26,7 @@ def calculate_dissociation_profile(
     units: str = "Ang",
     grid_density: int = 0,
     path_results: str | None = None,
+    pass_descriptor_ctx: bool = False,
     **scf_kwargs,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Evaluate trained model + reference on a sweep of bond lengths.
@@ -61,17 +63,14 @@ def calculate_dissociation_profile(
         h1e = mf.get_hcore(mol)
         energy_nuc = mol.energy_nuc()
 
-        ml_energy = scf_eval_jit(
-            params,
-            dm,
-            eri,
-            ao_grid,
-            mf.grids.weights,
-            s1e,
-            h1e,
-            energy_nuc,
-            mol.nelectron,
-        )
+        scf_args = [
+            params, dm, eri, ao_grid, mf.grids.weights,
+            s1e, h1e, energy_nuc, mol.nelectron,
+        ]
+        if pass_descriptor_ctx:
+            scf_args.append(jnp.asarray(mf.grids.coords))
+            scf_args.append(jnp.asarray(mol.atom_coords()))
+        ml_energy = scf_eval_jit(*scf_args)
 
         ml_energies.append(ml_energy)
         ref_energies.append(ref_energy)

@@ -1,9 +1,82 @@
-"""SCF operators: effective potential, total energy, AO values, occupations, density matrices."""
+"""SCF operators: effective potential, total energy, AO values, occupations, density matrices.
+
+Two XC encodings are supported:
+
+- **local**: the network returns a per-grid energy density per electron ε_xc(r).
+  The total XC energy is assembled outside the network as E_xc = Σ ε_xc(r) ρ(r) w(r).
+  This is the classical LDA/GGA / PySCF convention.
+
+- **global**: the network returns the already-integrated scalar E_xc[ρ].
+  No outer ρ·w multiplication is applied.
+
+Pick the matching `get_veff_*` for the encoding produced by your network.
+"""
 
 from collections.abc import Callable
 
 import jax.numpy as jnp
 from chex import Array
+
+
+def get_veff_local(
+    dm: Array,
+    eri: Array,
+    ao_grid: Array,
+    grid_weights: Array,
+    params: dict,
+    xc_eval_fn: Callable,
+) -> tuple[Array, Array, Array]:
+    """Effective KS potential for LOCAL encoding (ε_xc(r) per electron).
+
+    The network returns a per-grid energy density per electron, and we
+    integrate explicitly: E_xc = Σ ε_xc(r) ρ(r) w(r).
+
+    Returns (Vhf = J + Vxc, exc_energy, J).
+    """
+    J = jnp.einsum("ijkl,kl->ij", eri, dm)
+    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
+    exc, (vrho, _, _, _), _, _ = xc_eval_fn(
+        "", rho, params=params, grid_weights=grid_weights,
+    )
+    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid)
+    return J + Vxc, jnp.sum(exc * rho * grid_weights), J
+
+
+def get_veff_global(
+    dm: Array,
+    eri: Array,
+    ao_grid: Array,
+    grid_weights: Array,
+    params: dict,
+    xc_eval_fn: Callable,
+    grid_coords: Array | None = None,
+    atom_coords: Array | None = None,
+) -> tuple[Array, Array, Array]:
+    """Effective KS potential for GLOBAL encoding (scalar E_xc[ρ]).
+
+    The network returns the already-integrated scalar XC energy, so we do
+    NOT multiply by ρ·w again — that would double-integrate.
+
+    Descriptor-style networks (e.g. `DescriptorXC`) also need `grid_coords`
+    and `atom_coords` to evaluate atom-centered features; pass them through.
+    Plain `GlobalMLP` ignores both.
+
+    Returns (Vhf = J + Vxc, exc_energy, J).
+    """
+    J = jnp.einsum("ijkl,kl->ij", eri, dm)
+    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
+    network_extra_args = ()
+    if grid_coords is not None and atom_coords is not None:
+        # `DescriptorXC.__call__(rho, grid_coords, grid_weights, atom_coords)`
+        network_extra_args = (grid_coords, grid_weights, atom_coords)
+    exc, (vrho, _, _, _), _, _ = xc_eval_fn(
+        "", rho,
+        params=params,
+        grid_weights=grid_weights,
+        network_extra_args=network_extra_args,
+    )
+    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid)
+    return J + Vxc, exc, J
 
 
 def get_veff(
@@ -13,18 +86,23 @@ def get_veff(
     grid_weights: Array,
     params: dict,
     xc_eval_fn: Callable,
+    encoding: str = "local",
+    grid_coords: Array | None = None,
+    atom_coords: Array | None = None,
 ) -> tuple[Array, Array, Array]:
-    """Effective KS potential: Coulomb + XC contributions.
+    """Dispatch to `get_veff_local` or `get_veff_global` based on `encoding`.
 
-    Returns (Vhf=J+Vxc, exc_energy, J).
+    `grid_coords`/`atom_coords` are forwarded to the global path for
+    descriptor-style networks; ignored by the local path.
     """
-    J = jnp.einsum("ijkl,kl->ij", eri, dm)
-
-    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
-    exc, (vrho, _, _, _), _, _ = xc_eval_fn("", rho, params=params)
-    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid)
-
-    return J + Vxc, jnp.sum(exc * rho * grid_weights), J
+    if encoding == "local":
+        return get_veff_local(dm, eri, ao_grid, grid_weights, params, xc_eval_fn)
+    if encoding == "global":
+        return get_veff_global(
+            dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
+            grid_coords=grid_coords, atom_coords=atom_coords,
+        )
+    raise ValueError(f"Unknown XC encoding: {encoding!r} (expected 'local' or 'global').")
 
 
 def energy_tot(dm: Array, h1e: Array, J: Array, exc_energy: Array, energy_nuc: float) -> Array:

@@ -50,6 +50,7 @@ def _occ_step(mo_energy: Array, nelectron: int, frac_enabled: int, **frac_kwargs
     jax.jit,
     static_argnames=(
         "xc_eval_fn",
+        "encoding",
         "max_cycle",
         "diis_max_vec",
         "diis_min_vec",
@@ -79,8 +80,11 @@ def rks_loss(
     exact_energy: float,
     exact_density: Array,
     exact_dm: Array,
+    grid_coords: Array | None = None,
+    atom_coords: Array | None = None,
     *,
     xc_eval_fn: Callable,
+    encoding: str = "local",
     max_cycle: int = 15,
     diis_max_vec: int = 15,
     diis_min_vec: int = 2,
@@ -101,7 +105,10 @@ def rks_loss(
 
     print("Compiling/executing SCF loop")
 
-    vhf, exc_energy, J = get_veff(dm, eri, ao_grid, grid_weights, params, xc_eval_fn)
+    vhf, exc_energy, J = get_veff(
+        dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
+        encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
+    )
     e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc)
 
     diis_state = initialize_diis(diis_max_vec)
@@ -134,7 +141,11 @@ def rks_loss(
 
         dm = make_rdm1_custom(mo_coeff, mo_occ)
 
-        vhf, exc_energy, J = get_veff(dm, eri, ao_grid, grid_weights, params, xc_eval_fn)
+        vhf, exc_energy, J = get_veff(
+            dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
+            encoding=encoding,
+            grid_coords=grid_coords, atom_coords=atom_coords,
+        )
         e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc) + energy_entr
 
         if cycle > ignore_ks_iter:
@@ -159,8 +170,11 @@ def rks_energy(
     h1e: Array,
     energy_nuc: float,
     nelectron: int,
+    grid_coords: Array | None = None,
+    atom_coords: Array | None = None,
     *,
     xc_eval_fn: Callable,
+    encoding: str = "local",
     max_cycle: int = 15,
     diis_max_vec: int = 15,
     diis_min_vec: int = 2,
@@ -174,7 +188,10 @@ def rks_energy(
     frac_max_steps: int = 100,
 ) -> Array:
     """Differentiable SCF loop, returns final total energy."""
-    vhf, exc_energy, J = get_veff(dm, eri, ao_grid, grid_weights, params, xc_eval_fn)
+    vhf, exc_energy, J = get_veff(
+        dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
+        encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
+    )
     e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc)
 
     diis_state = initialize_diis(diis_max_vec)
@@ -206,7 +223,11 @@ def rks_energy(
 
         dm = make_rdm1_custom(mo_coeff, mo_occ)
 
-        vhf, exc_energy, J = get_veff(dm, eri, ao_grid, grid_weights, params, xc_eval_fn)
+        vhf, exc_energy, J = get_veff(
+            dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
+            encoding=encoding,
+            grid_coords=grid_coords, atom_coords=atom_coords,
+        )
         e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc) + energy_entr
 
     return e_tot

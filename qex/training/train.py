@@ -46,6 +46,15 @@ def train(
     exact_densities = jnp.stack([data[1][:, 3] for data in training_data])
     exact_dms = dms  # reuse dm as exact_dm for now (matches legacy script)
 
+    # Optional descriptor-network context: if precomputed has indices [7]/[8],
+    # they are (grid_coords, atom_coords). Pass them through to the SCF loop
+    # so global encoders like DescriptorXC can see them.
+    sample_precomputed = training_data[0][2]
+    has_descriptor_ctx = len(sample_precomputed) > 8
+    if has_descriptor_ctx:
+        grid_coords_all = jnp.stack([data[2][7] for data in training_data])
+        atom_coords_all = jnp.stack([data[2][8] for data in training_data])
+
     all_inputs = (
         dms,
         eris,
@@ -59,13 +68,16 @@ def train(
         exact_densities,
         exact_dms,
     )
+    if has_descriptor_ctx:
+        all_inputs = (*all_inputs, grid_coords_all, atom_coords_all)
     all_inputs = jax.device_put(all_inputs)
 
     scf_fn = partial(scf_loss_fn, xc_eval_fn=xc_eval_fn, **scf_kwargs)
+    in_axes = (None,) + (0,) * len(all_inputs)
 
     @jax.jit
     def loss_fn(params):
-        vmapped = jax.vmap(scf_fn, in_axes=(None, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        vmapped = jax.vmap(scf_fn, in_axes=in_axes)
         losses = vmapped(params, *all_inputs)
         return jnp.mean(losses)
 
