@@ -189,3 +189,4 @@ if __name__ == "__main__":
         dm = mf.make_rdm1(extrapolated_fock)
         fock = extrapolated_fock
         print(f"E_{i} = {mf.energy_tot(dm, fock, mf.get_veff(mol, dm)):.12f}")
+

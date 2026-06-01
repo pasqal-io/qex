@@ -3,7 +3,7 @@
 This module provides a noisy hardware-efficient ansatz circuit with same noise in all gates.
 
 Example:
-    >>> from qex.legacy.models.quantum.noisy_hea import hea_noisy
+    >>> from qex.qnn_backend.horqrux.noisy_hea import hea_noisy
     >>> from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
     >>> noise = (DigitalNoiseInstance(DigitalNoiseType.DEPOLARIZING, 0.01),)
     >>> noisy_ansatz = hea_noisy(n_qubits, n_layers, noise=noise)
@@ -19,7 +19,7 @@ from horqrux.apply import apply_gates as apply_gate
 from horqrux.primitives.parametric import RX, RY
 from horqrux.primitives.primitive import NOT, Primitive
 
-from qex.legacy.models.quantum.entangling_layers import entangling_ops
+from qex.qnn_backend.horqrux.entangling_layers import entangling_ops
 
 
 def hea_legacy(
@@ -130,14 +130,17 @@ def hea(
     else:
         not_gate = NOT
 
-    for _ in range(n_layers):
+    pidx = 0
+    for layer in range(n_layers):
         ops = []
         for i in range(n_qubits):
-            ops += [
-                fn(variational_param_prefix + str(uuid4()), qubit)
-                for fn, qubit in zip(rot_fns, [i for _ in range(len(rot_fns))])
+            new_ops = [
+                fn(f"{variational_param_prefix}{layer}_{i}_{k}", qubit)
+                for k, (fn, qubit) in enumerate(zip(rot_fns, [i for _ in range(len(rot_fns))]))
             ]
-            param_names += [op.param for op in ops]
+            pidx += len(new_ops)
+            ops += new_ops
+            param_names += [op.param for op in new_ops]
 
         # We place rotation gates first, then entangling gates.
         for i in range(n_qubits):

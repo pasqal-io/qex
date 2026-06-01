@@ -25,7 +25,7 @@ from horqrux.noise import NoiseProtocol
 from horqrux.primitives.parametric import RX, RY, RZ
 from horqrux.primitives.primitive import NOT, Primitive, Z
 
-from qex.legacy.models.quantum.entangling_layers import entangling_ops
+from qex.qnn_backend.horqrux.entangling_layers import entangling_ops
 
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cuda")  # "cuda" or "cpu"

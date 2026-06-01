@@ -51,9 +51,9 @@ from horqrux.utils.operator_utils import DiffMode, TargetQubits
 from jax import vmap
 from loguru import logger
 
-from qex.legacy.models.quantum.feature_maps import chebyshev_gates, direct_gates, product_gates
-from qex.legacy.models.quantum.hardware_ansatz import hea
-from qex.legacy.models.quantum.measurement import total_magnetization_ops
+from qex.qnn_backend.horqrux.feature_maps import chebyshev_gates, direct_gates, product_gates
+from qex.qnn_backend.horqrux.hardware_ansatz import hea
+from qex.qnn_backend.horqrux.measurement import total_magnetization_ops
 
 
 class QNN(QuantumCircuit):

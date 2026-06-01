@@ -70,9 +70,13 @@ def chebyshev_gates(
     else:
         ry = Ry
 
-    # Normalize between -1 and 1 to avoid NaNs
-    # Use the factors to avoid to be on the edge of the domain
-    x_normalized = 1.95 * (x - jnp.min(x)) / (jnp.max(x) - jnp.min(x) + 1e-10) - 0.95
+    # Map x into (-1, 1) but keep a safety margin away from ±1, where the
+    # derivative of arccos diverges (1/sqrt(1-x²) -> ∞). When this map is used
+    # inside an SCF loop that differentiates w.r.t. ρ, hitting the boundary
+    # produces gradients of order 1e14 that overflow to NaN downstream.
+    span = jnp.max(x) - jnp.min(x) + 1e-10
+    x_normalized = 1.8 * (x - jnp.min(x)) / span - 0.9
+    x_normalized = jnp.clip(x_normalized, -0.9, 0.9)
 
     encoding = 2 * (jnp.asarray(target_idx) + 1) * jnp.arccos(x_normalized)
     n_qubits_per_dim = encoding.shape[0] // encoding.shape[1]

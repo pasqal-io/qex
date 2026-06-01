@@ -8,7 +8,7 @@ from horqrux import QuantumCircuit, X, apply_gates, expectation, random_state, z
 from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
 from horqrux.primitives.parametric import RX
 
-from qex.legacy.models.quantum.measurement import (
+from qex.qnn_backend.horqrux.measurement import (
     qubit_magnetization,
     total_magnetization,
     total_magnetization_ops,

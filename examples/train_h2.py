@@ -13,17 +13,18 @@ from jax import random
 from qex.data_io.dataset_generation import DataGenerator, MoleculeConfig
 from qex.functionals.descriptor import DescriptorXC
 from qex.functionals.mlp import GlobalMLP, LocalMLP
+from qex.functionals.qcnn import QCNN
 from qex.functionals.xc import make_eval_xc_global, make_eval_xc_local
-from qex.legacy.td.train import patch_pyscfad
+# from qex.legacy.td.train import patch_pyscfad
 from qex.scf.operators import get_ao_value
-from qex.scf.rks import rks_energy, rks_loss
+from qex.scf.rks import rks_energy, rks_loss, rks_loss_scan
 from qex.training.evaluate import (
     calculate_dissociation_profile,
     plot_dissociation_profile,
 )
 from qex.training.train import train
 
-patch_pyscfad()
+# patch_pyscfad()
 jax.config.update("jax_enable_x64", True)
 
 
@@ -34,10 +35,11 @@ CONFIG = {
     "units": "Ang",
     "grid_density": 0,
     "learning_rate": 1e-4,
-    "n_iterations": 1000,
+    "n_iterations": 500,
     "energy_weight": 1.0,
     "density_weight": 1.0,
     "max_cycle": 15,
+    "use_diis": False,
     "diis_max_vec": 15,
     "diis_min_vec": 2,
     "diis_start_cycle": 1,
@@ -58,17 +60,32 @@ CONFIG = {
     # "global": network outputs the scalar E_xc[ρ] directly (already integrated).
     "encoding": "global",
     "n_grid": 1240,  # only used to size GlobalMLP's first Dense layer
-    # "mlp" (LocalMLP for local / GlobalMLP for global) or "descriptor"
-    # (DescriptorXC — only valid with encoding="global"; grid-size invariant).
-    "model": "descriptor",
+    # "mlp" (LocalMLP for local / GlobalMLP for global), "descriptor"
+    # (DescriptorXC — only valid with encoding="global"; grid-size invariant),
+    # or "qcnn" (quantum convolutional network; encoding="global" only).
+    "model": "qcnn",
     "n_atom": 2,
     # Global: [128, 128, 128, 128, 128]
     # Local: [32, 32]
-    "hidden_layers": [32, 32],
-    # Descriptor
+    "hidden_layers":  [128, 128, 128, 128, 128],
+    # Descriptor parameters
     "descriptor_alphas": (0.5, 1.0, 2.0, 4.0),
     "descriptor_scale": 1.0,
     "descriptor_rho_floor": 1e-10,
+    # QCNN parameters. `n_grid` must be divisible by qcnn_n_features ** qcnn_n_layers.
+    "qcnn_n_qubits": 2,
+    "qcnn_n_features": 2,
+    "qcnn_n_layers": 2,
+    "qcnn_n_var_layers": 1,
+    "qcnn_feature_map": "direct",
+    "qcnn_head_features": (32,),
+    # QCNN noise. `qcnn_gate_noise` is a list of (type, probability) pairs applied
+    # to every gate in the feature map and ansatz; types: "bitflip",
+    # "amplitude_damping", "depolarizing", "phaseflip" (any horqrux DigitalNoiseType).
+    # `qcnn_gaussian_noise_std` adds Gaussian noise to each layer's output to
+    # emulate sampling/readout noise (0 disables it).
+    "qcnn_gate_noise": [],  # e.g. [("bitflip", 0.01), ("amplitude_damping", 0.01)]
+    "qcnn_gaussian_noise_std": 0.0,
 }
 
 jax.config.update("jax_platform_name", CONFIG["platform"])
@@ -89,6 +106,7 @@ def _scf_kwargs():
     return dict(
         encoding=CONFIG["encoding"],
         max_cycle=CONFIG["max_cycle"],
+        use_diis=CONFIG["use_diis"],
         diis_max_vec=CONFIG["diis_max_vec"],
         diis_min_vec=CONFIG["diis_min_vec"],
         diis_start_cycle=CONFIG["diis_start_cycle"],
@@ -105,10 +123,33 @@ def _scf_kwargs():
 if __name__ == "__main__":
 
     is_descriptor = CONFIG["model"] == "descriptor"
+    is_qcnn = CONFIG["model"] == "qcnn"
     if is_descriptor and CONFIG["encoding"] != "global":
         raise ValueError("DescriptorXC requires encoding='global'.")
+    if is_qcnn and CONFIG["encoding"] != "global":
+        raise ValueError("QCNN requires encoding='global'.")
 
-    if is_descriptor:
+    if is_qcnn:
+        gate_noise = None
+        if CONFIG["qcnn_gate_noise"]:
+            from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
+            gate_noise = tuple(
+                DigitalNoiseInstance(DigitalNoiseType[kind.upper()], prob)
+                for kind, prob in CONFIG["qcnn_gate_noise"]
+            )
+        network = QCNN(
+            n_qubits=CONFIG["qcnn_n_qubits"],
+            n_features=CONFIG["qcnn_n_features"],
+            n_layers=CONFIG["qcnn_n_layers"],
+            n_var_layers=CONFIG["qcnn_n_var_layers"],
+            feature_map=CONFIG["qcnn_feature_map"],
+            head_features=CONFIG["qcnn_head_features"],
+            noise=gate_noise,
+            gaussian_noise_std=CONFIG["qcnn_gaussian_noise_std"],
+        )
+        xc_eval_fn = make_eval_xc_global(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
+        params = network.init(random.PRNGKey(CONFIG["rng"]), jnp.ones(CONFIG["n_grid"]))
+    elif is_descriptor:
         network = DescriptorXC(
             hidden=CONFIG["hidden_layers"],
             alphas=CONFIG["descriptor_alphas"],
@@ -176,16 +217,24 @@ if __name__ == "__main__":
             optimizer,
         )
 
+    # `rks_loss_scan` uses lax.scan over SCF cycles (no DIIS) so compile time
+    # is roughly independent of `max_cycle` — for QCNN training that's the
+    # difference between ~3s and several minutes per jit. We strip DIIS-specific
+    # kwargs since the scan variant doesn't take them.
+    scf_kwargs = _scf_kwargs()
+    for k in ("diis_max_vec", "diis_min_vec", "diis_start_cycle", "diis_damping"):
+        scf_kwargs.pop(k, None)
+
     trained_params = train(
         params,
         training_data,
         optimizer,
-        scf_loss_fn=rks_loss,
+        scf_loss_fn=rks_loss_scan,
         xc_eval_fn=xc_eval_fn,
         n_iterations=CONFIG["n_iterations"],
         energy_weight=CONFIG["energy_weight"],
         density_weight=CONFIG["density_weight"],
-        **_scf_kwargs(),
+        **scf_kwargs,
     )
 
     print("\n" + "-" * 70)

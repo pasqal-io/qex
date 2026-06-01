@@ -7,9 +7,9 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from horqrux.utils import random_state
 
-from qex.legacy.models.quantum.feature_maps import chebyshev_gates
 from qex.legacy.models.quantum.quantum_models import QNN
-from qex.legacy.models.quantum.variational_ansatz import hea
+from qex.qnn_backend.horqrux.feature_maps import chebyshev_gates
+from qex.qnn_backend.horqrux.variational_ansatz import hea
 
 
 def measure_performance(n_qubits=2, n_layers=2, batch_size=4, n_features=2, n_runs=100):

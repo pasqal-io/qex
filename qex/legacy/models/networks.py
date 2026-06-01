@@ -37,7 +37,7 @@ from horqrux.noise import NoiseProtocol
 from horqrux.utils.operator_utils import DiffMode
 from loguru import logger
 
-from qex.legacy.models.quantum.hardware_ansatz import hea
+from qex.qnn_backend.horqrux.hardware_ansatz import hea
 
 
 class KohnShamNetwork(Protocol):

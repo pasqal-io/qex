@@ -401,7 +401,7 @@ if __name__ == "__main__":
     # Same for QNNs
     from horqrux.utils.operator_utils import zero_state
 
-    from qex.legacy.models.quantum.hardware_ansatz import hea
+    from qex.qnn_backend.horqrux.hardware_ansatz import hea
 
     print("\nTest 6: QNN with self-interaction, negativity transform, and noise")
     n_qubits = 4
