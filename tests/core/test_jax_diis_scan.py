@@ -88,3 +88,172 @@ def test_scan_diis_runs_under_lax_scan(h2_seed):
 
     assert focks.shape == (3, *fock0.shape)
     assert jnp.all(jnp.isfinite(final_fock))
+
+
+# ---------------------------------------------------------------------------
+# Failure-mode regression tests.
+#
+# Both DIIS variants build a Gram matrix B = E E^T of error vectors and solve
+# a small linear system for the extrapolation coefficients. As error vectors
+# become collinear (which happens precisely as SCF converges well) B becomes
+# rank-deficient, and `jnp.linalg.solve` returns NaN/Inf silently — the
+# `try/except` in the legacy version never fires under JIT. The tests below
+# pin down two consequences:
+#
+#   1. Forward pass must stay finite on a near-singular history.
+#   2. The gradient of the extrapolated Fock w.r.t. the input Fock must be
+#      finite even when B is severely ill-conditioned. This is the exact
+#      failure mode that produces NaN parameter updates when training the
+#      QCNN through `rks_loss` with DIIS enabled.
+# ---------------------------------------------------------------------------
+
+
+def _near_converged_focks(fock_shape, n: int, scales=None):
+    """Build a Fock sequence that mimics late-stage SCF convergence.
+
+    Each Fock is a fixed `base` plus a tiny shrinking perturbation, so the
+    DIIS error vectors form a near-degenerate set — exactly the regime
+    where DIIS B-matrix conditioning collapses during training.
+    """
+    rng = np.random.default_rng(0)
+    if scales is None:
+        scales = [1e-6 * 0.5 ** i for i in range(n)]
+    base = jnp.eye(fock_shape[0]) * jnp.linspace(1.0, 2.0, fock_shape[0])
+    return [
+        base + s * jnp.asarray(rng.standard_normal(fock_shape))
+        for s in scales
+    ]
+
+
+def _run_diis_chain_legacy(fock_in, dm, ovlp, prior_focks, max_vec, min_vecs):
+    state = init_diis_legacy(max_vec=max_vec)
+    for prior in prior_focks:
+        _, state = apply_diis_legacy(
+            state, prior, dm, ovlp, max_vec=max_vec, min_vecs=min_vecs,
+        )
+    fock_out, _ = apply_diis_legacy(
+        state, fock_in, dm, ovlp, max_vec=max_vec, min_vecs=min_vecs,
+    )
+    return jnp.sum(fock_out ** 2)
+
+
+def _run_diis_chain_scan(fock_in, dm, ovlp, prior_focks, max_vec, min_vecs):
+    fock_size = fock_in.size
+    state = initialize_diis_scan(max_vec=max_vec, fock_size=fock_size)
+    for prior in prior_focks:
+        _, state = apply_diis_scan(
+            state, prior, dm, ovlp, max_vec=max_vec, min_vecs=min_vecs,
+        )
+    fock_out, _ = apply_diis_scan(
+        state, fock_in, dm, ovlp, max_vec=max_vec, min_vecs=min_vecs,
+    )
+    return jnp.sum(fock_out ** 2)
+
+
+# Gradient-magnitude ceiling. Without `stop_gradient` on the DIIS coefficients,
+# `∂F_extrap/∂F_in` carries `B^{-1}` factors that explode to O(1e5+) on a
+# near-converged history — the exact mechanism that turns into NaN parameter
+# updates once compounded through `max_cycle=15` SCF iterations and reverse-mode
+# through a QCNN. The fix is to stop gradients through `c = solve(B, rhs)`.
+# 100 is well above any healthy gradient (typical scale is O(1)) and well
+# below the O(1e5) blowup, so it cleanly separates fixed vs. unfixed.
+_GRAD_MAGNITUDE_CEILING = 1e2
+
+
+def test_legacy_diis_forward_finite_on_near_converged_history(h2_seed):
+    ovlp = h2_seed["ovlp"]
+    dm = h2_seed["dm0"]
+    fock_shape = h2_seed["fock0"].shape
+
+    max_vec = 6
+    focks = _near_converged_focks(fock_shape, n=max_vec)
+    state = init_diis_legacy(max_vec=max_vec)
+    for fock in focks:
+        fock_out, state = apply_diis_legacy(
+            state, fock, dm, ovlp, max_vec=max_vec, min_vecs=2,
+        )
+    assert jnp.all(jnp.isfinite(fock_out))
+
+
+def test_scan_diis_forward_finite_on_near_converged_history(h2_seed):
+    ovlp = h2_seed["ovlp"]
+    dm = h2_seed["dm0"]
+    fock_shape = h2_seed["fock0"].shape
+    fock_size = h2_seed["fock0"].size
+
+    max_vec = 6
+    focks = _near_converged_focks(fock_shape, n=max_vec)
+    state = initialize_diis_scan(max_vec=max_vec, fock_size=fock_size)
+    for fock in focks:
+        fock_out, state = apply_diis_scan(
+            state, fock, dm, ovlp, max_vec=max_vec, min_vecs=2,
+        )
+    assert jnp.all(jnp.isfinite(fock_out))
+
+
+def test_legacy_diis_gradient_bounded_on_near_converged_history(h2_seed):
+    """Reproduces the QCNN-training NaN mechanism.
+
+    On a near-converged Fock history the DIIS B-matrix is ill-conditioned, so
+    `c = B^{-1} rhs` and its derivative w.r.t. B blow up as 1/σ². Without
+    `stop_gradient` on `c`, that blowup propagates into `∂F_extrap/∂F_in` and
+    becomes O(1e5+) — which then compounds through `max_cycle` SCF cycles and
+    a QCNN backward pass into the NaN parameter updates we observe in
+    `train_h2.py` with DIIS on.
+    """
+    ovlp = h2_seed["ovlp"]
+    dm = h2_seed["dm0"]
+    fock_shape = h2_seed["fock0"].shape
+
+    max_vec = 6
+    prior = _near_converged_focks(fock_shape, n=max_vec)
+    fock_in = prior[-1] + 1e-3 * jnp.ones(fock_shape)
+
+    grad = jax.grad(_run_diis_chain_legacy)(
+        fock_in, dm, ovlp, prior, max_vec, 2,
+    )
+    grad_max = float(jnp.max(jnp.abs(grad)))
+    assert jnp.all(jnp.isfinite(grad))
+    assert grad_max < _GRAD_MAGNITUDE_CEILING, (
+        f"legacy DIIS gradient exploded to {grad_max:.2e} on near-converged "
+        "history (expected stop_gradient on c to keep it bounded)"
+    )
+
+
+def test_scan_diis_gradient_bounded_on_near_converged_history(h2_seed):
+    ovlp = h2_seed["ovlp"]
+    dm = h2_seed["dm0"]
+    fock_shape = h2_seed["fock0"].shape
+
+    max_vec = 6
+    prior = _near_converged_focks(fock_shape, n=max_vec)
+    fock_in = prior[-1] + 1e-3 * jnp.ones(fock_shape)
+
+    grad = jax.grad(_run_diis_chain_scan)(
+        fock_in, dm, ovlp, prior, max_vec, 2,
+    )
+    grad_max = float(jnp.max(jnp.abs(grad)))
+    assert jnp.all(jnp.isfinite(grad))
+    assert grad_max < _GRAD_MAGNITUDE_CEILING, (
+        f"scan DIIS gradient exploded to {grad_max:.2e} on near-converged history"
+    )
+
+
+def test_scan_diis_gradient_bounded_under_jit(h2_seed):
+    """Same as the scan gradient test but exercises the jit path."""
+    ovlp = h2_seed["ovlp"]
+    dm = h2_seed["dm0"]
+    fock_shape = h2_seed["fock0"].shape
+
+    max_vec = 6
+    prior = _near_converged_focks(fock_shape, n=max_vec)
+    fock_in = prior[-1] + 1e-3 * jnp.ones(fock_shape)
+
+    grad_fn = jax.jit(
+        jax.grad(_run_diis_chain_scan),
+        static_argnames=("max_vec", "min_vecs"),
+    )
+    grad = grad_fn(fock_in, dm, ovlp, prior, max_vec, 2)
+    grad_max = float(jnp.max(jnp.abs(grad)))
+    assert jnp.all(jnp.isfinite(grad))
+    assert grad_max < _GRAD_MAGNITUDE_CEILING

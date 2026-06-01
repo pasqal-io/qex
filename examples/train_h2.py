@@ -39,7 +39,7 @@ CONFIG = {
     "energy_weight": 1.0,
     "density_weight": 1.0,
     "max_cycle": 15,
-    "use_diis": False,
+    "use_diis": True,
     "diis_max_vec": 15,
     "diis_min_vec": 2,
     "diis_start_cycle": 1,
@@ -60,10 +60,11 @@ CONFIG = {
     # "global": network outputs the scalar E_xc[ρ] directly (already integrated).
     "encoding": "global",
     "n_grid": 1240,  # only used to size GlobalMLP's first Dense layer
-    # "mlp" (LocalMLP for local / GlobalMLP for global), "descriptor"
+    # "mlp" (LocalMLP for local / GlobalMLP for global),
+    # "descriptor"
     # (DescriptorXC — only valid with encoding="global"; grid-size invariant),
     # or "qcnn" (quantum convolutional network; encoding="global" only).
-    "model": "qcnn",
+    "model": "descriptor",
     "n_atom": 2,
     # Global: [128, 128, 128, 128, 128]
     # Local: [32, 32]

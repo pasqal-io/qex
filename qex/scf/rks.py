@@ -345,6 +345,7 @@ def rks_energy(
     xc_eval_fn: Callable,
     encoding: str = "local",
     max_cycle: int = 15,
+    use_diis: bool = True,
     diis_max_vec: int = 15,
     diis_min_vec: int = 2,
     diis_start_cycle: int = 1,
@@ -356,14 +357,20 @@ def rks_energy(
     frac_step_grad: float = 0.6,
     frac_max_steps: int = 100,
 ) -> Array:
-    """Differentiable SCF loop, returns final total energy."""
+    """Differentiable SCF loop, returns final total energy.
+
+    `use_diis` toggles Fock extrapolation so this evaluator can be configured
+    to match whichever SCF path was used at training time (see `rks_loss_scan`)
+    — train/eval mismatch on DIIS would otherwise drift the dissociation
+    profile away from the converged training fixed point.
+    """
     vhf, exc_energy, J = get_veff(
         dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
         encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
     )
     e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc)
 
-    diis_state = initialize_diis(diis_max_vec)
+    diis_state = initialize_diis(diis_max_vec) if use_diis else None
 
     frac_kwargs = dict(
         frac_theta=frac_theta,
@@ -376,7 +383,7 @@ def rks_energy(
     for cycle in range(max_cycle):
         fock = h1e + vhf
 
-        if cycle >= diis_start_cycle:
+        if use_diis and cycle >= diis_start_cycle:
             fock, diis_state = apply_diis(
                 diis_state,
                 fock,

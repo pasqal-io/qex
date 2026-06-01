@@ -13,6 +13,32 @@ Public surface:
                                       max_vec, min_vecs, damping)
 
 The state is a `DIISStateScan` NamedTuple of JAX arrays — fully traceable.
+
+Differentiability through DIIS
+------------------------------
+The extrapolation coefficients `c` solve `B c = rhs` where `B` is the Gram
+matrix of stored error vectors. As SCF converges the error vectors become
+near-collinear, `B` becomes rank-deficient, and `∂c/∂B` carries a `B^{-1}`
+factor scaling as `1/σ²` in the smallest singular value of `B`. On a
+near-converged H₂ history this hits **O(10¹³)** in the gradient (see
+`tests/core/test_jax_diis_scan.py::test_scan_diis_gradient_bounded_on_near_converged_history`),
+which compounds through `max_cycle` SCF iterations and reverse-mode through
+the XC functional into NaN parameter updates — the mechanism behind the
+QCNN-training NaNs in `examples/train_h2.py` when `use_diis=True`.
+
+Fix in `_extrapolate`:
+  1. `jnp.linalg.lstsq` (pinv with rcond cutoff) instead of `jnp.linalg.solve`,
+     so the solve stays finite when `B` is rank-deficient. Under JIT,
+     `solve` returns NaN/Inf silently rather than raising.
+  2. `jax.lax.stop_gradient` on `c`. The forward DIIS acceleration is
+     preserved — extrapolation `Σᵢ cᵢ Fᵢ` is still differentiable through the
+     `Fᵢ` — but the ill-conditioned `B^{-1}` factor in `∂c/∂B` no longer
+     reaches the parameter gradient. This matches the standard PySCF-AD
+     treatment of DIIS.
+
+The gradient-magnitude regression tests assert `max|grad| < 100` on a
+near-converged history (including under `jit`); without the fix the
+observed magnitude is ~3×10¹³, so any regression will fail loudly.
 """
 
 from __future__ import annotations
@@ -122,7 +148,16 @@ def _extrapolate(
     rhs = jnp.zeros(n + 1).at[0].set(-1.0)
     rhs = jnp.where(valid_ext, rhs, 0.0)
 
-    c = jnp.linalg.solve(B_masked, rhs)
+    # Use lstsq (pinv) instead of solve so the system stays finite when B is
+    # rank-deficient (collinear errors near convergence).
+    #
+    # `stop_gradient` on c is the key fix for QCNN-training NaNs with DIIS on:
+    # ∂c/∂B carries a B⁻¹ factor whose magnitude scales as 1/σ², and on a
+    # near-converged history this hits O(1e13). The forward extrapolation
+    # `Σ cᵢ Fᵢ` is still fully differentiable through the Fᵢ; freezing the
+    # coefficients matches the standard PySCF-AD treatment of DIIS.
+    c = jnp.linalg.lstsq(B_masked, rhs, rcond=1e-12)[0]
+    c = jax.lax.stop_gradient(c)
     coeffs = c[1:]  # (n,)
 
     # Linear combination of stored Fock vectors weighted by coeffs; invalid

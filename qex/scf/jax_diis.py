@@ -1,9 +1,44 @@
-"""
-JAX-based implementation of DIIS.
+"""JAX-based implementation of DIIS (Pulay's direct inversion in the iterative
+subspace) for SCF Fock-matrix extrapolation.
+
+History is stored as a growing Python list of error / Fock vectors, so this
+implementation is NOT compatible with `lax.scan`. Use `jax_diis_scan.py` for
+the scan-friendly fixed-buffer variant; the two are kept numerically
+equivalent and an equivalence test pins this down
+(`tests/core/test_jax_diis_scan.py::test_scan_diis_matches_legacy`).
+
+Differentiability through DIIS
+------------------------------
+The DIIS coefficients `c` come from solving `B c = rhs` where `B` is a Gram
+matrix of error vectors. As SCF converges the error vectors become
+near-collinear and `B` becomes rank-deficient — its smallest singular value
+σ goes to zero, and `∂c/∂B` carries a `B^{-1}` factor that scales as
+`1/σ²`. Empirically this hits **O(10¹³)** on a near-converged H₂ history
+(see `test_legacy_diis_gradient_bounded_on_near_converged_history`), which
+then compounds through `max_cycle` SCF iterations and any reverse-mode
+quantum/neural-network XC functional into NaN parameter updates — the
+mechanism behind the QCNN-training NaNs in `examples/train_h2.py` when
+`use_diis=True`.
+
+Fix:
+  1. `jnp.linalg.lstsq` (pinv with rcond cutoff) instead of `jnp.linalg.solve`,
+     so the solve stays finite when `B` is rank-deficient. The original
+     `try/except LinAlgError` fallback is dead under JIT — `solve` returns
+     NaN/Inf there instead of raising.
+  2. `jax.lax.stop_gradient` on `c`. The forward DIIS acceleration is
+     preserved (extrapolation `Σᵢ cᵢ Fᵢ` is still differentiable through the
+     `Fᵢ`), but the ill-conditioned `B^{-1}` factor in `∂c/∂B` no longer
+     reaches the parameter gradient. This matches the standard PySCF-AD
+     treatment of DIIS.
+
+The gradient-magnitude regression tests in `test_jax_diis_scan.py` assert
+`max|grad| < 100` on a near-converged history; without the fix they observe
+~3×10¹³, so any future regression will fail loudly.
 """
 
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
 
 
@@ -83,14 +118,18 @@ def extrapolate_fock(
     diag_idx = jnp.diag_indices(n_vecs + 1)
     B_reg = B.at[diag_idx].add(1e-14)
 
-    try:
-        c = jnp.linalg.solve(B_reg, rhs)
-    except:
-        U, s, Vh = jnp.linalg.svd(B_reg, full_matrices=False)
-        s_inv = jnp.where(s > condition_threshold, 1.0 / s, 0.0)
-        c = Vh.T @ (s_inv[:, None] * (U.T @ rhs[:, None]))
-        c = c.flatten()
-
+    # Solve via lstsq (pinv with an rcond cutoff) so the system stays finite
+    # when B becomes rank-deficient — `jnp.linalg.solve` returns NaN/Inf under
+    # JIT and the bare `except` below never fires there.
+    #
+    # `stop_gradient` is the crucial bit: ∂c/∂B carries a B⁻¹ factor that
+    # explodes as 1/σ² on a near-converged history (errors collinear), which
+    # is exactly when training-time NaNs appear with DIIS on. The forward
+    # extrapolation `Σ cᵢ Fᵢ` is still differentiable through the Fᵢ — we only
+    # freeze the coefficients themselves, which is the standard PySCF-AD
+    # treatment of DIIS.
+    c = jnp.linalg.lstsq(B_reg, rhs, rcond=condition_threshold)[0]
+    c = jax.lax.stop_gradient(c)
     coeffs = c[1:]
 
     fock_flat = jnp.zeros_like(state.fock_vecs[0])
