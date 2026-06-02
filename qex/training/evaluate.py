@@ -27,6 +27,7 @@ import numpy as np
 from loguru import logger
 from tqdm import tqdm
 
+from qex.functionals.features import select
 from qex.scf.operators import get_ao_value
 
 # Chemical accuracy: 1 kcal/mol ~= 1.6 mHa. Used as the parity-plot tolerance band.
@@ -50,7 +51,7 @@ def evaluate_samples(
     *,
     scf_energy_fn: Callable,
     xc_eval_fn: Callable,
-    pass_descriptor_ctx: bool = False,
+    required_features: tuple[str, ...] = (),
     label: str = "evaluation",
     verbose: bool = True,
     **scf_kwargs,
@@ -61,8 +62,9 @@ def evaluate_samples(
         molecule_configs: list of :class:`qex.data_io.MoleculeConfig` to evaluate.
         scf_energy_fn: SCF loop returning the final total energy (e.g.
             :func:`qex.scf.rks_energy`); ``scf_kwargs`` are forwarded as-is.
-        pass_descriptor_ctx: forward grid/atom coordinates (needed by descriptor
-            networks).
+        required_features: the consuming network's ``required_features``; exactly
+            these keys are computed and passed as the SCF loop's feature bag (see
+            :mod:`qex.functionals.features`). Empty for plain density models.
         label: name used in progress output.
 
     Returns:
@@ -83,6 +85,14 @@ def evaluate_samples(
             cfg, save_data=False
         )
 
+        # Compute the full feature bag this molecule can offer, then hand the
+        # network exactly the keys it declared (see qex.functionals.features).
+        available = {
+            "grid_coords": jnp.asarray(mf.grids.coords),
+            "atom_coords": jnp.asarray(mol.atom_coords()),
+        }
+        features = select(available, required_features)
+
         scf_args = [
             params,
             dm,
@@ -93,10 +103,8 @@ def evaluate_samples(
             mf.get_hcore(mol),
             mol.energy_nuc(),
             mol.nelectron,
+            features,
         ]
-        if pass_descriptor_ctx:
-            scf_args.append(jnp.asarray(mf.grids.coords))
-            scf_args.append(jnp.asarray(mol.atom_coords()))
 
         pred_energy = float(scf_eval_jit(*scf_args))
         predicted.append(pred_energy)
@@ -128,7 +136,7 @@ def evaluate_dataset_split(
     *,
     scf_energy_fn: Callable,
     xc_eval_fn: Callable,
-    pass_descriptor_ctx: bool = False,
+    required_features: tuple[str, ...] = (),
     label: str = "evaluation",
     verbose: bool = True,
     **scf_kwargs,
@@ -145,8 +153,9 @@ def evaluate_dataset_split(
         datapoints: converged :class:`qex.data_io.Datapoint`\\ s (e.g.
             ``dataset.converged("test")``); failure records must be filtered out.
         scf_energy_fn / xc_eval_fn / scf_kwargs: as in :func:`evaluate_samples`.
-        pass_descriptor_ctx: forward grid/atom coords (descriptor networks); the
-            datapoints must carry them (built ``with_descriptor_ctx=True``).
+        required_features: the consuming network's ``required_features``; selected
+            from each datapoint's feature bag (see :mod:`qex.functionals.features`).
+            The datapoints must carry these keys (a missing one fails by name).
 
     Returns:
         ``(predicted, reference, metrics)`` aligned with ``datapoints``.
@@ -160,20 +169,11 @@ def evaluate_dataset_split(
         logger.info("Running {} over {} stored datapoint(s)...", label, len(datapoints))
     iterator = tqdm(datapoints) if verbose else datapoints
     for dp in iterator:
-        ref_energy, _coords_density, precomputed, dm = dp.to_training_tuple()
-        # `precomputed` is (eri, ao_grid, weights, ovlp, hcore, e_nuc, nelectron)
-        # and, iff the datapoint carries descriptor context, (grid_coords,
-        # atom_coords) appended -- the exact arg order `scf_energy_fn` expects.
-        precomputed = list(precomputed)
-        scf_args = [params, dm, *precomputed[:7]]
-        if pass_descriptor_ctx:
-            if not dp.has_descriptor_ctx:
-                raise ValueError(
-                    f"{dp.meta.name!r}: descriptor context requested but the "
-                    "datapoint was built without it (rebuild with "
-                    "with_descriptor_ctx=True)."
-                )
-            scf_args.extend(precomputed[7:9])
+        ref_energy, _coords_density, core_inputs, bag, dm = dp.to_training_tuple()
+        # core_inputs is (eri, ao_grid, weights, ovlp, hcore, e_nuc, nelectron);
+        # the network gets exactly the feature keys it declared.
+        features = select(bag, required_features)
+        scf_args = [params, dm, *core_inputs, features]
 
         pred_energy = float(scf_eval_jit(*scf_args))
         predicted.append(pred_energy)
@@ -270,7 +270,7 @@ def calculate_dissociation_profile(
     grid_density: int = 0,
     verbose: int = 0,
     path_results: str | None = None,
-    pass_descriptor_ctx: bool = False,
+    required_features: tuple[str, ...] = (),
     **scf_kwargs,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Evaluate trained model + reference on a sweep of bond lengths.
@@ -311,7 +311,7 @@ def calculate_dissociation_profile(
         molecule_configs,
         scf_energy_fn=scf_energy_fn,
         xc_eval_fn=xc_eval_fn,
-        pass_descriptor_ctx=pass_descriptor_ctx,
+        required_features=required_features,
         label="dissociation profile",
         **scf_kwargs,
     )

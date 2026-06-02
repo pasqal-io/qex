@@ -49,31 +49,29 @@ def get_veff_global(
     grid_weights: Array,
     params: dict,
     xc_eval_fn: Callable,
-    grid_coords: Array | None = None,
-    atom_coords: Array | None = None,
+    features: dict | None = None,
 ) -> tuple[Array, Array, Array]:
     """Effective KS potential for GLOBAL encoding (scalar E_xc[ρ]).
 
     The network returns the already-integrated scalar XC energy, so we do
     NOT multiply by ρ·w again — that would double-integrate.
 
-    Descriptor-style networks (e.g. `DescriptorXC`) also need `grid_coords`
-    and `atom_coords` to evaluate atom-centered features; pass them through.
-    Plain `GlobalMLP` ignores both.
+    `features` is the named model-feature bag (see `qex.functionals.features`),
+    already narrowed to the network's `required_features`. It is forwarded to
+    `xc_eval_fn` verbatim and handed to the network by keyword; this function
+    does not interpret it, so adding a new feature never touches the SCF math.
+    Descriptor-style networks consume e.g. `grid_coords`/`atom_coords`; a plain
+    `GlobalMLP` requests `()` and gets an empty bag.
 
     Returns (Vhf = J + Vxc, exc_energy, J).
     """
     J = jnp.einsum("ijkl,kl->ij", eri, dm)
     rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
-    network_extra_args = ()
-    if grid_coords is not None and atom_coords is not None:
-        # `DescriptorXC.__call__(rho, grid_coords, grid_weights, atom_coords)`
-        network_extra_args = (grid_coords, grid_weights, atom_coords)
     exc, (vrho, _, _, _), _, _ = xc_eval_fn(
         "", rho,
         params=params,
         grid_weights=grid_weights,
-        network_extra_args=network_extra_args,
+        features=features,
     )
     Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid)
     return J + Vxc, exc, J
@@ -87,20 +85,20 @@ def get_veff(
     params: dict,
     xc_eval_fn: Callable,
     encoding: str = "local",
-    grid_coords: Array | None = None,
-    atom_coords: Array | None = None,
+    features: dict | None = None,
 ) -> tuple[Array, Array, Array]:
     """Dispatch to `get_veff_local` or `get_veff_global` based on `encoding`.
 
-    `grid_coords`/`atom_coords` are forwarded to the global path for
-    descriptor-style networks; ignored by the local path.
+    `features` is the named model-feature bag (see `qex.functionals.features`),
+    forwarded to the global path for descriptor-style networks; ignored by the
+    local path (ε_xc(r) depends on ρ alone).
     """
     if encoding == "local":
         return get_veff_local(dm, eri, ao_grid, grid_weights, params, xc_eval_fn)
     if encoding == "global":
         return get_veff_global(
             dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
-            grid_coords=grid_coords, atom_coords=atom_coords,
+            features=features,
         )
     if encoding == "libxc":
         # Reference path: a standard PySCF/libxc functional (LDA/GGA/mGGA/hybrid)

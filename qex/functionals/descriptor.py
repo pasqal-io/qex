@@ -22,6 +22,8 @@
 # grid - omitted for now to keep the plumbing simple. They can be added by
 # precomputing ao_grad and including grad rho in the descriptor function.
 
+from typing import ClassVar
+
 import flax.linen as nn
 import jax.numpy as jnp
 from chex import Array
@@ -79,6 +81,13 @@ class DescriptorXC(nn.Module):
         E_xc = -scale * softplus(h)                             # <= 0
     """
 
+    # Named features this network consumes (see qex.functionals.features). The
+    # pipeline selects exactly these from the dataset's feature bag and passes
+    # them as keyword args, so the network never depends on positional order.
+    # `ClassVar` so Flax/dataclass treats it as a constant, not a hyperparameter
+    # field (a defaulted field before `hidden` would break dataclass ordering).
+    required_features: ClassVar[tuple[str, ...]] = ("grid_coords", "atom_coords")
+
     hidden: Sequence[int]
     alphas: Sequence[float]
     scale: float = 1.0
@@ -89,8 +98,9 @@ class DescriptorXC(nn.Module):
     def __call__(
         self,
         rho: Array,             # (n_grid,)
-        grid_coords: Array,     # (n_grid, 3)
         grid_weights: Array,    # (n_grid,)
+        *,
+        grid_coords: Array,     # (n_grid, 3)
         atom_coords: Array,     # (n_atom, 3)
     ) -> Array:                 # scalar
         d = compute_descriptors(
@@ -154,7 +164,9 @@ if __name__ == "__main__":
         rho_floor=1e-10,
     )
 
-    params = model.init(k4, rho, grid_coords, grid_weights, atom_coords)
+    params = model.init(
+        k4, rho, grid_weights, grid_coords=grid_coords, atom_coords=atom_coords
+    )
 
     n_params = sum(x.size for x in jax.tree_util.tree_leaves(params))
     print(f"Parameters: {n_params}")
@@ -162,14 +174,19 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # Forward pass
     # -------------------------------------------------------------------------
-    exc = model.apply(params, rho, grid_coords, grid_weights, atom_coords)
+    exc = model.apply(
+        params, rho, grid_weights, grid_coords=grid_coords, atom_coords=atom_coords
+    )
     print(f"E_xc = {exc:.6f} Ha")
 
     # -------------------------------------------------------------------------
     # Gradient of E_xc w.r.t. rho  (vrho)
     # -------------------------------------------------------------------------
     vrho = jax.grad(
-        lambda r: model.apply(params, r, grid_coords, grid_weights, atom_coords)
+        lambda r: model.apply(
+            params, r, grid_weights,
+            grid_coords=grid_coords, atom_coords=atom_coords,
+        )
     )(rho)
     print(f"vrho  mean={vrho.mean():.4e}  std={vrho.std():.4e}  shape={vrho.shape}")
 

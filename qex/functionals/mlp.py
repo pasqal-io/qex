@@ -13,6 +13,7 @@ non-positivity prior on the XC energy.
 """
 
 from collections.abc import Callable, Sequence
+from typing import ClassVar
 
 import flax.linen as nn
 import jax.numpy as jnp
@@ -24,6 +25,9 @@ class LocalMLP(nn.Module):
 
     Applied pointwise. Input shape `(n_grid,)`, output shape `(n_grid,)`.
     """
+
+    # Local encoding evaluates ε_xc(r) pointwise from ρ alone (no extra features).
+    required_features: ClassVar[tuple[str, ...]] = ()
 
     features: Sequence[int]
     act_fn: Callable = nn.gelu
@@ -49,12 +53,20 @@ class GlobalMLP(nn.Module):
     input dim is `n_grid`, so the model is tied to a fixed grid size.
     """
 
+    # No geometric/extra features needed: ρ alone -> E_xc. The pipeline passes
+    # an empty feature bag, so this model is immune to whatever optional features
+    # the dataset happens to carry (see qex.functionals.features).
+    required_features: ClassVar[tuple[str, ...]] = ()
+
     features: Sequence[int]
     act_fn: Callable = nn.gelu
     scale: float = 1.0
 
     @nn.compact
-    def __call__(self, rho: Array) -> Array:
+    def __call__(self, rho: Array, grid_weights: Array | None = None) -> Array:
+        # `grid_weights` is part of the global-encoding call signature (used by
+        # descriptor-style nets); a plain density MLP ignores it.
+        del grid_weights
         h = rho
         for feat in self.features:
             h = self.act_fn(nn.Dense(feat)(h))

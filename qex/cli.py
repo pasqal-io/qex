@@ -276,10 +276,13 @@ def _gen_data_command(argv: list[str]) -> int:
         level=config.get("logging.level", None),
     )
 
-    _, _, _, is_descriptor = build_network(config)
+    network, _, _, _ = build_network(config)
+    # Generate whatever named features the network declares (see
+    # qex.functionals.features); a plain density model needs none.
+    needs_features = bool(getattr(network, "required_features", ()))
     dataset = dataset_for_config(
         config,
-        is_descriptor=is_descriptor,
+        is_descriptor=needs_features,
         cache_path=args.output or config.get("data.dataset_file", None),
         use_cache=not args.force,
     )

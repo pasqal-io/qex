@@ -63,12 +63,19 @@ def _exc_and_vrho_global(
     grid_weights: Array,
     network: nn.Module,
     vxc_grad_scale: float,
-    network_extra_args: tuple = (),
+    features: dict | None = None,
 ) -> tuple[Array, Array]:
-    """Global encoding: network output is the scalar E_xc[ρ] already integrated."""
+    """Global encoding: network output is the scalar E_xc[ρ] already integrated.
+
+    `features` is the named model-feature bag (see `qex.functionals.features`),
+    already narrowed to this network's `required_features`. It is forwarded to
+    the network **by keyword**, so the network's signature — not a positional
+    ordering convention — defines the contract.
+    """
+    features = features or {}
 
     def energy_fn(rho_in: Array) -> Array:
-        return network.apply(params, rho_in, *network_extra_args)
+        return network.apply(params, rho_in, grid_weights, **features)
 
     exc_scalar, vjp_fn = jax.vjp(energy_fn, rho)
     (drho,) = vjp_fn(jnp.ones_like(exc_scalar))
@@ -128,7 +135,7 @@ def make_eval_xc_global(
         verbose=None,
         params: dict | None = None,
         grid_weights: Array | None = None,
-        network_extra_args: tuple = (),
+        features: dict | None = None,
         **_,
     ):
         if deriv != 1:
@@ -136,7 +143,7 @@ def make_eval_xc_global(
         if grid_weights is None:
             raise ValueError("Global eval_xc requires `grid_weights` kwarg.")
         exc, vrho = _exc_and_vrho_global(
-            params, rho, grid_weights, network, vxc_grad_scale, network_extra_args,
+            params, rho, grid_weights, network, vxc_grad_scale, features,
         )
         return exc, (vrho, None, None, None), None, None
 

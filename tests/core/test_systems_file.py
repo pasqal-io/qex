@@ -131,16 +131,29 @@ def _fake_datapoint(name, nao=2, ngrid=4, with_ctx=False):
     )
 
 
-def test_descriptor_ctx_can_be_dropped():
-    """A ctx-carrying datapoint serves both descriptor and non-descriptor models."""
+def test_features_bag_carries_ctx():
+    """A ctx-carrying datapoint exposes grid/atom coords, selectable by name.
+
+    One dataset serves any model: the core inputs are always the same 7 arrays;
+    the optional features ride in a named bag the consumer selects from via
+    ``required_features``.
+    """
     dp = _fake_datapoint("a", with_ctx=True)
     assert dp.has_descriptor_ctx
-    # With ctx: 7 base + 2 ctx arrays.
-    _, _, precomputed_ctx, _ = dp.to_training_tuple(include_descriptor_ctx=True)
-    assert len(precomputed_ctx) == 9
-    # Dropped: back to 7, so a non-descriptor model accepts it.
-    _, _, precomputed_no_ctx, _ = dp.to_training_tuple(include_descriptor_ctx=False)
-    assert len(precomputed_no_ctx) == 7
+    # The full bag is available on the datapoint...
+    assert set(dp.features) == {"grid_coords", "atom_coords"}
+    # ...and to_training_tuple narrows it to the model's declared features.
+    _, _, core, features, _ = dp.to_training_tuple(("grid_coords", "atom_coords"))
+    assert len(core) == 7  # core physics inputs, fixed
+    assert set(features) == {"grid_coords", "atom_coords"}
+
+
+def test_features_bag_narrows_to_request():
+    """A no-feature model gets an empty bag even when the datapoint carries ctx."""
+    dp = _fake_datapoint("a", with_ctx=True)
+    _, _, core, features, _ = dp.to_training_tuple()  # required_features=()
+    assert len(core) == 7
+    assert features == {}
 
 
 def test_dataset_roundtrip_without_pyscf(tmp_path):
@@ -156,8 +169,9 @@ def test_dataset_roundtrip_without_pyscf(tmp_path):
     assert len(loaded.train) == 2
     assert len(loaded.val) == 1
     assert len(loaded.test) == 1
-    # to_training_tuple packs (energy, coords_density, precomputed, dm).
-    energy, coords_density, precomputed, dm = loaded.train[0].to_training_tuple()
+    # to_training_tuple packs (energy, coords_density, core, features, dm).
+    energy, coords_density, core, features, dm = loaded.train[0].to_training_tuple()
     assert energy == pytest.approx(-1.0)
-    assert len(precomputed) == 7  # no descriptor ctx
+    assert len(core) == 7  # core physics inputs
+    assert features == {}  # no optional features stored
     assert dm.shape == (2, 2)

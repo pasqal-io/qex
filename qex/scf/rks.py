@@ -195,8 +195,7 @@ def rks_loss(
     exact_energy: float,
     exact_density: Array,
     exact_dm: Array,
-    grid_coords: Array | None = None,
-    atom_coords: Array | None = None,
+    features: dict | None = None,
     *,
     xc_eval_fn: Callable,
     encoding: str = "local",
@@ -216,13 +215,18 @@ def rks_loss(
     frac_step_grad: float = 0.6,
     frac_max_steps: int = 100,
 ) -> Array:
-    """Differentiable SCF loop, returns weighted (energy + density) loss."""
+    """Differentiable SCF loop, returns weighted (energy + density) loss.
+
+    `features` is the named model-feature bag (see `qex.functionals.features`),
+    passed straight through to `get_veff` and consumed by the network. The SCF
+    math never reads it, so adding a feature does not touch this loop.
+    """
 
     logger.info("Compiling/executing SCF loop (rks_loss, unrolled + DIIS)")
 
     vhf, exc_energy, J = get_veff(
         dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
-        encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
+        encoding=encoding, features=features,
     )
     e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc)
 
@@ -258,8 +262,7 @@ def rks_loss(
 
         vhf, exc_energy, J = get_veff(
             dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
-            encoding=encoding,
-            grid_coords=grid_coords, atom_coords=atom_coords,
+            encoding=encoding, features=features,
         )
         e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc) + energy_entr
 
@@ -311,8 +314,7 @@ def rks_loss_scan(
     exact_energy: float,
     exact_density: Array,
     exact_dm: Array,
-    grid_coords: Array | None = None,
-    atom_coords: Array | None = None,
+    features: dict | None = None,
     *,
     xc_eval_fn: Callable,
     encoding: str = "local",
@@ -378,7 +380,7 @@ def rks_loss_scan(
 
         vhf, exc_energy, J = get_veff(
             dm_c, eri, ao_grid, grid_weights, params, xc_eval_fn,
-            encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
+            encoding=encoding, features=features,
         )
         fock = h1e + vhf
 
@@ -404,7 +406,7 @@ def rks_loss_scan(
         )
         vhf, exc_energy, J = get_veff(
             dm_new, eri, ao_grid, grid_weights, params, xc_eval_fn,
-            encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
+            encoding=encoding, features=features,
         )
         e_tot = energy_tot(dm_new, h1e, J, exc_energy, energy_nuc) + energy_entr
         include = (cycle > ignore_ks_iter).astype(e_tot.dtype)
@@ -436,8 +438,7 @@ def rks_energy(
     h1e: Array,
     energy_nuc: float,
     nelectron: int,
-    grid_coords: Array | None = None,
-    atom_coords: Array | None = None,
+    features: dict | None = None,
     *,
     xc_eval_fn: Callable,
     encoding: str = "local",
@@ -461,10 +462,13 @@ def rks_energy(
     to match whichever SCF path was used at training time (see `rks_loss_scan`)
     — train/eval mismatch on DIIS would otherwise drift the dissociation
     profile away from the converged training fixed point.
+
+    `features` is the named model-feature bag (see `qex.functionals.features`),
+    forwarded to `get_veff` and consumed by the network; the SCF math ignores it.
     """
     vhf, exc_energy, J = get_veff(
         dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
-        encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
+        encoding=encoding, features=features,
     )
     e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc)
 
@@ -498,8 +502,7 @@ def rks_energy(
 
         vhf, exc_energy, J = get_veff(
             dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
-            encoding=encoding,
-            grid_coords=grid_coords, atom_coords=atom_coords,
+            encoding=encoding, features=features,
         )
         e_tot = energy_tot(dm, h1e, J, exc_energy, energy_nuc) + energy_entr
 

@@ -116,6 +116,14 @@ _ARRAY_FIELDS = (
     "energy_nuc",
     "nelectron",
 )
+
+# Optional, extensible *model features* (see qex.functionals.features): named
+# arrays that some networks consume on top of the density, produced only when a
+# DFT code can compute them. Each is stored as an optional HDF5 dataset and ends
+# up as a key in the per-sample feature bag. Adding a feature (e.g. "rho_grad"
+# for GGA, or a classical descriptor for a B3LYP-style functional) means adding
+# its name here + a field on Datapoint + producing it — no index surgery, no
+# change to the SCF loop.
 _OPTIONAL_ARRAY_FIELDS = ("grid_coords", "atom_coords")
 
 
@@ -179,29 +187,51 @@ class Datapoint:
     def has_descriptor_ctx(self) -> bool:
         return self.grid_coords is not None and self.atom_coords is not None
 
+    @property
+    def features(self) -> dict:
+        """The named model-feature bag for this system (see qex.functionals.features).
+
+        Every optional feature field this datapoint actually carries, as a
+        ``{name: jnp.ndarray}`` dict. Networks select the subset they declare in
+        ``required_features``; the SCF loop forwards the bag without reading it.
+        Adding a feature field to :class:`Datapoint` automatically surfaces it
+        here — no change to this method.
+        """
+        bag = {}
+        for name in _OPTIONAL_ARRAY_FIELDS:
+            value = getattr(self, name)
+            if value is not None:
+                bag[name] = jnp.asarray(value)
+        return bag
+
     @classmethod
     def failed(cls, meta: MoleculeConfig, error: str = "") -> "Datapoint":
         """Construct a failure record for a system that did not converge/raised."""
         return cls(meta=meta, converged=False, error=error)
 
-    def to_training_tuple(self, *, include_descriptor_ctx: bool = True) -> tuple:
-        """Pack into the ``(energy, coords_density, precomputed, dm)`` tuple.
+    def to_training_tuple(self, required_features: tuple[str, ...] = ()) -> tuple:
+        """Pack into ``(energy, coords_density, core_inputs, features, dm)``.
 
-        This is exactly the structure consumed by :func:`qex.train` and the
-        SCF loops, so loading a dataset is a drop-in for inline generation.
+        This is exactly the structure consumed by :func:`qex.train` and the SCF
+        loops, so loading a dataset is a drop-in for inline generation.
 
-        ``include_descriptor_ctx`` controls whether stored grid/atom coordinates
-        are appended to ``precomputed``. A dataset is generally built *with*
-        context (so it serves any model), but a non-descriptor model can't accept
-        those extra args -- the consumer passes ``False`` to drop them. No-op when
-        the datapoint has no context.
+        - ``core_inputs`` is the fixed positional tuple of SCF physics arrays
+          ``(eri, ao_grid, grid_weights, s1e, h1e, energy_nuc, nelectron)`` —
+          every closed-shell RKS run needs exactly these.
+        - ``features`` is the named model-feature bag narrowed to
+          ``required_features`` (the consuming network's declared keys; default
+          none). A model thus only ever sees the features it asked for, and a
+          missing one fails loudly by name — no per-model flag, no extras leaking
+          into a model that can't accept them.
         """
+        from qex.functionals.features import select
+
         if not self.converged:
             raise ValueError(
                 f"Datapoint {self.meta.name!r} did not converge; it has no data "
                 f"to train on. Filter with `converged` before calling this."
             )
-        precomputed = [
+        core_inputs = (
             jnp.asarray(self.eri),
             jnp.asarray(self.ao_grid),
             jnp.asarray(self.grid_weights),
@@ -209,12 +239,15 @@ class Datapoint:
             jnp.asarray(self.h1e),
             float(self.energy_nuc),
             int(self.nelectron),
-        ]
-        if include_descriptor_ctx and self.has_descriptor_ctx:
-            precomputed.append(jnp.asarray(self.grid_coords))
-            precomputed.append(jnp.asarray(self.atom_coords))
+        )
         coords_density = jnp.c_[jnp.asarray(self.coords), jnp.asarray(self.density)]
-        return (float(self.energy), coords_density, tuple(precomputed), jnp.asarray(self.dm))
+        return (
+            float(self.energy),
+            coords_density,
+            core_inputs,
+            select(self.features, required_features),
+            jnp.asarray(self.dm),
+        )
 
 
 @dataclass
@@ -241,17 +274,15 @@ class QexDataset:
         return sum(1 for dp in self.split(name) if not dp.converged)
 
     def training_tuples(
-        self, name: str, *, include_descriptor_ctx: bool = True
+        self, name: str, required_features: tuple[str, ...] = ()
     ) -> list[tuple]:
         """The split's *converged* datapoints as training tuples (see Datapoint).
 
-        ``include_descriptor_ctx=False`` drops stored grid/atom context so the
-        tuples suit a non-descriptor model (see
-        :meth:`Datapoint.to_training_tuple`).
+        Each tuple's feature bag is narrowed to ``required_features``, so one
+        dataset serves any model with no per-model flag.
         """
         return [
-            dp.to_training_tuple(include_descriptor_ctx=include_descriptor_ctx)
-            for dp in self.converged(name)
+            dp.to_training_tuple(required_features) for dp in self.converged(name)
         ]
 
     def uids(self, name: str) -> set[str]:

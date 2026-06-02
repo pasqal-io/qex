@@ -44,46 +44,68 @@ class TrainHistory:
 
 
 def _stack_inputs(data: list) -> tuple:
-    """Stack a list of ``(energy, coords_density, precomputed, dm)`` samples.
+    """Stack a list of ``(energy, coords_density, core_inputs, features, dm)``.
 
-    Returns the tuple of batched arrays consumed (positionally) by the vmapped
-    SCF loss, including the optional descriptor context (grid/atom coords) when
-    present. Mirrors the structure documented on :func:`train`.
+    Returns ``(core_batched, features_batched)`` where:
+
+    - ``core_batched`` is the tuple of batched core arrays consumed positionally
+      by the vmapped SCF loss (``dm, eri, …, exact_dm``) — fixed and unchanged.
+    - ``features_batched`` is the named model-feature bag with each array stacked
+      along a new leading batch axis (a ``dict[str, Array]``, possibly empty).
+      It is passed as the SCF loss's ``features`` argument; the network selects
+      the subset it declares. Adding a feature needs no change here — every key
+      the producer emits is stacked automatically.
     """
-    dms = jnp.stack([d[3] for d in data])
-    all_inputs = (
-        dms,                                              # dm
-        jnp.stack([d[2][0] for d in data]),              # eri
-        jnp.stack([d[2][1] for d in data]),              # ao_grid
-        jnp.stack([d[2][2] for d in data]),              # grid_weights
-        jnp.stack([d[2][3] for d in data]),              # s1e
-        jnp.stack([d[2][4] for d in data]),              # h1e
-        jnp.array([d[2][5] for d in data]),              # energy_nuc
-        jnp.array([d[2][6] for d in data]),              # nelectron
-        jnp.array([d[0] for d in data]),                 # exact_energy
-        jnp.stack([d[1][:, 3] for d in data]),           # exact_density
-        dms,                                             # exact_dm (== dm for now)
+    # Transpose the list of per-sample tuples into columns we can batch.
+    energies, coords_density, core_inputs, bags, dms = zip(*data)
+    eri, ao_grid, weights, s1e, h1e, e_nuc, nelec = zip(*core_inputs)
+
+    dm = jnp.stack(dms)
+    core = (
+        dm,                                          # dm
+        jnp.stack(eri),                              # eri
+        jnp.stack(ao_grid),                          # ao_grid
+        jnp.stack(weights),                          # grid_weights
+        jnp.stack(s1e),                              # s1e
+        jnp.stack(h1e),                              # h1e
+        jnp.array(e_nuc),                            # energy_nuc
+        jnp.array(nelec),                            # nelectron
+        jnp.array(energies),                         # exact_energy
+        jnp.stack([cd[:, 3] for cd in coords_density]),  # exact_density
+        dm,                                          # exact_dm (== dm for now)
     )
 
-    # Optional descriptor context: precomputed indices [7]/[8] are
-    # (grid_coords, atom_coords) for global encoders like DescriptorXC.
-    if len(data[0][2]) > 8:
-        all_inputs = (
-            *all_inputs,
-            jnp.stack([d[2][7] for d in data]),          # grid_coords
-            jnp.stack([d[2][8] for d in data]),          # atom_coords
+    # Stack the per-sample feature bags into one batched bag. All samples must
+    # carry the same keys; assert that loudly rather than silently dropping a
+    # feature for some samples.
+    keys = tuple(bags[0])
+    if any(tuple(bag) != keys for bag in bags):
+        raise ValueError(
+            f"Inconsistent feature keys across samples (first sample has {keys}). "
+            f"Every datapoint in a split must carry the same features."
         )
-    return jax.device_put(all_inputs)
+    features = {k: jnp.stack([bag[k] for bag in bags]) for k in keys}
+
+    return jax.device_put((core, features))
 
 
 def _make_loss_fn(scf_loss_fn: Callable, xc_eval_fn: Callable, inputs: tuple, scf_kwargs):
-    """Build a jitted ``params -> mean loss`` closure over fixed ``inputs``."""
+    """Build a jitted ``params -> mean loss`` closure over fixed ``inputs``.
+
+    ``inputs`` is ``(core_batched, features_batched)`` from :func:`_stack_inputs`.
+    Core arrays are mapped over the batch axis (``in_axes=0``); the feature bag
+    is one more vmapped argument whose ``in_axes`` is a dict ``{k: 0}`` (an empty
+    bag is a trivial pytree, so a no-feature model maps over nothing).
+    """
+    core, features = inputs
     scf_fn = partial(scf_loss_fn, xc_eval_fn=xc_eval_fn, **scf_kwargs)
-    in_axes = (None,) + (0,) * len(inputs)
+    core_axes = (0,) * len(core)
+    feat_axes = {k: 0 for k in features}
+    in_axes = (None, *core_axes, feat_axes)
 
     @jax.jit
     def loss_fn(params):
-        losses = jax.vmap(scf_fn, in_axes=in_axes)(params, *inputs)
+        losses = jax.vmap(scf_fn, in_axes=in_axes)(params, *core, features)
         return jnp.mean(losses)
 
     return loss_fn
@@ -107,11 +129,12 @@ def train(
     """vmap-batched SCF training over a fixed dataset, with optional validation.
 
     `training_data` (and `val_data`) is a list of tuples
-    (energy, coords_and_density, precomputed, dm) where `precomputed` is
-    (eri, ao_grid, grid_weights, s1e, h1e, energy_nuc, nelectron[, grid_coords,
-    atom_coords]). `scf_loss_fn` takes (params, dm, eri, ao_grid, grid_weights,
-    s1e, h1e, energy_nuc, nelectron, exact_energy, exact_density, exact_dm,
-    **kwargs) and returns a scalar loss.
+    (energy, coords_and_density, core_inputs, features, dm) where `core_inputs`
+    is (eri, ao_grid, grid_weights, s1e, h1e, energy_nuc, nelectron) and
+    `features` is the named model-feature bag (a possibly-empty dict, see
+    qex.functionals.features). `scf_loss_fn` takes (params, dm, eri, ao_grid,
+    grid_weights, s1e, h1e, energy_nuc, nelectron, exact_energy, exact_density,
+    exact_dm, features, **kwargs) and returns a scalar loss.
 
     Args:
         val_data: Optional validation set. When given, validation loss is

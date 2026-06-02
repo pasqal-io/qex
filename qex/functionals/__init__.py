@@ -11,6 +11,7 @@ into the ``xc_eval_fn`` consumed by the SCF loops in :mod:`qex.scf`.
 """
 
 from qex.functionals.descriptor import DescriptorXC
+from qex.functionals.features import KNOWN_FEATURES, FeatureBag, select
 from qex.functionals.mlp import GlobalMLP, LocalMLP
 from qex.functionals.qcnn import QCNN
 from qex.functionals.xc import make_eval_xc_global, make_eval_xc_local
@@ -22,4 +23,7 @@ __all__ = [
     "QCNN",
     "make_eval_xc_local",
     "make_eval_xc_global",
+    "FeatureBag",
+    "KNOWN_FEATURES",
+    "select",
 ]

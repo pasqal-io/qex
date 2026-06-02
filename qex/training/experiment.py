@@ -47,6 +47,7 @@ from qex.functionals import (
     QCNN,
     make_eval_xc_global,
     make_eval_xc_local,
+    select,
 )
 from qex.scf import get_ao_value, rks_energy, rks_loss_scan
 from qex.training.evaluate import (
@@ -176,9 +177,9 @@ def build_network(config: Config) -> tuple[nn.Module, Callable, dict, bool]:
         params = network.init(
             random.PRNGKey(rng),
             jnp.ones(n_grid),
-            jnp.zeros((n_grid, 3)),
             jnp.ones(n_grid) / n_grid,
-            jnp.zeros((n_atom, 3)),
+            grid_coords=jnp.zeros((n_grid, 3)),
+            atom_coords=jnp.zeros((n_atom, 3)),
         )
     elif encoding == "local":
         network = LocalMLP(features=hidden, act_fn=nn.gelu)
@@ -271,10 +272,18 @@ def molecule_configs_for_split(
     ]
 
 
-def _pack_sample(data_generator: DataGenerator, cfg: MoleculeConfig, is_descriptor: bool):
-    """Generate one molecule's data and pack it into the training-loop tuple."""
+def _pack_sample(
+    data_generator: DataGenerator,
+    cfg: MoleculeConfig,
+    required_features: tuple[str, ...],
+):
+    """Generate one molecule's data and pack it into the training-loop tuple.
+
+    Builds the fixed core-input tuple plus the named feature bag, narrowed to the
+    network's ``required_features`` (see :mod:`qex.functionals.features`).
+    """
     mol, mf, dm, energy, density, coords = data_generator.generate_data(cfg)
-    precomputed = [
+    core_inputs = (
         mol.intor("int2e", aosym="s1"),
         get_ao_value(mol, mf.grids.coords),
         mf.grids.weights,
@@ -282,18 +291,20 @@ def _pack_sample(data_generator: DataGenerator, cfg: MoleculeConfig, is_descript
         mf.get_hcore(mol),
         mol.energy_nuc(),
         mol.nelectron,
-    ]
-    if is_descriptor:
-        precomputed.append(jnp.asarray(mf.grids.coords))
-        precomputed.append(jnp.asarray(mol.atom_coords()))
-    return (energy, jnp.c_[coords, density], tuple(precomputed), dm)
+    )
+    available = {
+        "grid_coords": jnp.asarray(mf.grids.coords),
+        "atom_coords": jnp.asarray(mol.atom_coords()),
+    }
+    features = select(available, required_features)
+    return (energy, jnp.c_[coords, density], core_inputs, features, dm)
 
 
 def assemble_training_data(
     config: Config,
     data_generator: DataGenerator,
     molecule_config_factory: Callable,
-    is_descriptor: bool,
+    required_features: tuple[str, ...],
     split: str = "train",
 ) -> list:
     """Generate reference data for ``split`` in the :func:`qex.train` format (inline).
@@ -316,7 +327,10 @@ def assemble_training_data(
     molecule_configs = molecule_configs_for_split(
         config, molecule_config_factory, split
     )
-    return [_pack_sample(data_generator, cfg, is_descriptor) for cfg in molecule_configs]
+    return [
+        _pack_sample(data_generator, cfg, required_features)
+        for cfg in molecule_configs
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -502,11 +516,16 @@ def run_experiment(
     )
 
     network, xc_eval_fn, params, is_descriptor = build_network(config)
+    # The network declares exactly which named features it consumes; the whole
+    # pipeline (generation, selection, eval) keys off this instead of model-type
+    # booleans. A plain density model declares `()` (see qex.functionals.features).
+    required_features = tuple(getattr(network, "required_features", ()))
+    needs_features = bool(required_features)
     logger.info(
-        "Network built: type={} encoding={} (descriptor_ctx={})",
+        "Network built: type={} encoding={} required_features={}",
         config.get("model.type", "descriptor"),
         config.get("model.encoding", "global"),
-        is_descriptor,
+        required_features,
     )
 
     if molecule_config_factory is None:
@@ -529,34 +548,25 @@ def run_experiment(
         dataset = dataset_for_config(
             config,
             molecule_config_factory=molecule_config_factory,
-            is_descriptor=is_descriptor,
+            is_descriptor=needs_features,
             cache_path=dataset_file,
             use_cache=config.get("data.cache_dataset", True),
         )
-    # A descriptor model needs per-point grid/atom context. If the dataset was
-    # built without it, fail loudly *here* with an actionable message rather than
-    # deep inside the vmapped SCF loop (a cryptic "DescriptorXC.__call__()
-    # missing 3 required positional arguments"). Rebuild the dataset with context
-    # (the `gen-data --systems` path always stores it).
-    if is_descriptor:
-        first = next(
-            (dp for s in ("train", "val", "test") for dp in dataset.converged(s)),
-            None,
-        )
-        if first is not None and not first.has_descriptor_ctx:
-            raise ValueError(
-                "This model uses descriptor encoding, which needs grid/atom "
-                "coordinates per system, but the dataset"
-                + (f" at {dataset_file}" if from_file else "")
-                + " was built without them. Rebuild it with descriptor context, "
-                "e.g. `qex gen-data --systems <systems.yaml> -o <path>` (that "
-                "path always stores context), or train a non-descriptor model."
-            )
-
-    # A dataset is built with descriptor context so it serves any model; a
-    # non-descriptor model can't accept those extra args, so drop them here.
-    training_data = dataset.training_tuples("train", include_descriptor_ctx=is_descriptor)
-    val_data = dataset.training_tuples("val", include_descriptor_ctx=is_descriptor)
+    # Each sample's feature bag is narrowed to exactly the keys this network
+    # declared (`required_features`), so the vmapped SCF loop never hands a model
+    # a feature it can't accept and one .h5 serves any model. A missing key fails
+    # loudly by name inside `select`; surface a rebuild hint when that happens.
+    try:
+        training_data = dataset.training_tuples("train", required_features)
+        val_data = dataset.training_tuples("val", required_features)
+    except KeyError as exc:
+        raise ValueError(
+            f"This model requires features {list(required_features)}, but the "
+            f"dataset" + (f" at {dataset_file}" if from_file else "") + " does "
+            "not carry them all. Rebuild it so it stores these features (e.g. "
+            "`qex gen-data --systems <systems.yaml> -o <path>` stores grid/atom "
+            "coords), or train a model that does not require them."
+        ) from exc
     test_points = dataset.converged("test")
     logger.info(
         "Data split -> train: {} | val: {} | test: {}",
@@ -607,7 +617,7 @@ def run_experiment(
             test_points,
             scf_energy_fn=rks_energy,
             xc_eval_fn=xc_eval_fn,
-            pass_descriptor_ctx=is_descriptor,
+            required_features=required_features,
             label="test set",
             **scf_kwargs,
         )
@@ -618,7 +628,7 @@ def run_experiment(
             [dp.meta for dp in test_points],
             scf_energy_fn=rks_energy,
             xc_eval_fn=xc_eval_fn,
-            pass_descriptor_ctx=is_descriptor,
+            required_features=required_features,
             label="test set",
             **scf_kwargs,
         )
@@ -673,7 +683,7 @@ def run_experiment(
             grid_density=config.get("data.grid_density", 0),
             verbose=config.get("data.verbose", 0),
             path_results=output_dir,
-            pass_descriptor_ctx=is_descriptor,
+            required_features=required_features,
             **scf_kwargs,
         )
         if make_plot:

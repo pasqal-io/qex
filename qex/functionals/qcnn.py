@@ -15,6 +15,7 @@ pipeline without any glue code.
 """
 
 from collections.abc import Callable, Sequence
+from typing import ClassVar
 
 import flax.linen as nn
 import jax
@@ -178,6 +179,9 @@ class QCNN(nn.Module):
     energy. The non-positivity prior `-scale * softplus(·)` matches `GlobalMLP`.
     """
 
+    # ρ vector in, scalar out: no geometric/extra features (see GlobalMLP).
+    required_features: ClassVar[tuple[str, ...]] = ()
+
     n_qubits: int = 4
     n_features: int = 4
     n_layers: int = 2
@@ -192,7 +196,9 @@ class QCNN(nn.Module):
     gaussian_noise_std: float = 0.0
 
     @nn.compact
-    def __call__(self, rho: Array) -> Array:
+    def __call__(self, rho: Array, grid_weights: Array | None = None) -> Array:
+        # `grid_weights` is part of the global-encoding signature; QCNN ignores it.
+        del grid_weights
         h = rho
         for _ in range(self.n_layers):
             h = QCNNLayer(
