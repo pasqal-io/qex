@@ -285,7 +285,7 @@ def main():
     trainer = KSDFTTrainer(
         config_dict=config,
         network=network,
-        data_path=project_path / "data" / "od",
+        data_path=project_path / "data" / "legacy" / "od",
     )
 
     # Train model

@@ -69,6 +69,9 @@ class MoleculeConfig:
         max_cycle: Maximum number of SCF cycles
         max_memory: Maximum memory usage in bytes
         use_ccsd_triples_correction: Whether to include (T) correction for CCSD
+        verbose: PySCF print level for the reference solver (CCSD/RKS/FCI).
+            0 = silent (default), 3 = normal SCF table, 4 = info, 5+ = debug.
+            This is PySCF's own stdout chatter, separate from QEX's loguru log.
     """
 
     name: str
@@ -85,6 +88,7 @@ class MoleculeConfig:
     max_memory: float = 1e6
     use_ccsd_triples_correction: bool = False
     symmetry: bool = True
+    verbose: int = 0
 
 
 class DataGenerator:
@@ -146,6 +150,8 @@ class DataGenerator:
         mol.atom = config.atom_coords
         mol.unit = config.units
         mol.basis = config.basis
+        # PySCF's own stdout verbosity for the reference solver (0 = silent).
+        mol.verbose = config.verbose
         mol.build()
 
         # Generate grid
@@ -154,7 +160,7 @@ class DataGenerator:
         grids.becke_scheme = pyscf.dft.gen_grid.stratmann
         grids.build()
 
-        logger.info(f"Grid points: {grids.coords.shape}")
+        logger.debug(f"Grid points: {grids.coords.shape}")
 
         # Calculate energy and density
         mol, mf, dm_ao, energy, density, coords = calculate_energy_and_density(
@@ -165,6 +171,7 @@ class DataGenerator:
             max_cycle=config.max_cycle,
             use_ccsd_triples_correction=config.use_ccsd_triples_correction,
             max_memory=config.max_memory,
+            verbose=config.verbose,
         )
 
         # Optional legacy persistence. Only here do we touch the filesystem:
@@ -212,16 +219,16 @@ class DataGenerator:
             - Unit conversion is handled explicitly for consistency
         """
 
-        logger.info(f"\nPARSER: Starting and converting if needed to {units}...")
-        logger.info(
+        logger.debug(f"\nPARSER: Starting and converting if needed to {units}...")
+        logger.debug(
             "PARSER: PySCF typically does everything in NOT in Angstroms (A) but Bohr (B) - atomic units.",
         )
 
         data: list[list[float]] = []
         if "B" in units.upper():
-            logger.info("PARSER: Converting to Bohr the coordinates.")
+            logger.debug("PARSER: Converting to Bohr the coordinates.")
         elif "A" in units.upper():
-            logger.info("PARSER: Already in Angstroms. No conversion needed.")
+            logger.debug("PARSER: Already in Angstroms. No conversion needed.")
         else:
             raise ValueError("PARSER: Choose correct units! ANG or B.")
 
@@ -280,7 +287,7 @@ class DataGenerator:
         data_array = np.array(data)
 
         # Final tensor shape.
-        logger.info(f"PARSER: Final data shape {data_array.shape}")
+        logger.debug(f"PARSER: Final data shape {data_array.shape}")
         filepath = os.path.splitext(filepath)[0] + ".npy"
 
         # Save the density.
@@ -299,6 +306,7 @@ def calculate_energy_and_density(
     max_cycle: int = 20,
     use_ccsd_triples_correction: bool = False,
     max_memory: float = 1e6,
+    verbose: int = 0,
     **kwargs: Any,
 ) -> tuple[gto.Mole, Any, FloatArray, float, FloatArray, FloatArray]:
     """Calculate molecular energy and electron density using various electronic structure methods.
@@ -329,7 +337,7 @@ def calculate_energy_and_density(
         ValueError: If an unsupported method is specified
     """
 
-    logger.info(f"    Generating data using {method} method")
+    logger.debug(f"    Generating data using {method} method")
 
     if method.lower() == "rks":
         mf = dft.RKS(
@@ -338,6 +346,7 @@ def calculate_energy_and_density(
             max_memory=max_memory,
             **kwargs,
         )
+        mf.verbose = verbose
         mf.grids = grid
         mf.xc = xc
         # DFT calculation
@@ -373,9 +382,12 @@ def calculate_energy_and_density(
     elif method.lower() == "ccsd":
         # Run SCF and use CCSD to get RDMs.
         mf = scf.RHF(mol)
+        mf.verbose = verbose
         mf.kernel()
 
-        mycc = cc.CCSD(mf).run()
+        mycc = cc.CCSD(mf)
+        mycc.verbose = verbose
+        mycc.run()
         mycc.kernel()
         energy = mycc.e_tot
         # Reference converged only if BOTH the underlying RHF and CCSD did.
@@ -384,7 +396,7 @@ def calculate_energy_and_density(
         )
         if use_ccsd_triples_correction:
             et = mycc.ccsd_t()  # works only when not reading FCIDUMP file.
-            logger.info(f"    CCSD(T) correction: {et}")
+            logger.debug(f"    CCSD(T) correction: {et}")
             energy += et
 
         dm_ao = mycc.make_rdm1(ao_repr=True)
@@ -401,6 +413,7 @@ def calculate_energy_and_density(
             max_memory=max_memory,
             **kwargs,
         )
+        mf.verbose = verbose
         # mf = scf.addons.frac_occ(mf)
         mf.grids = grid
         # LDA should be sufficient as we just want the coordinates.
@@ -443,12 +456,13 @@ def calculate_energy_and_density(
             max_memory=max_memory,
             **kwargs,
         )
+        mf.verbose = verbose
         mf.grids = grid
         mf.xc = xc
         # DFT calculation
         mf.kernel()
 
-        logger.info(" FCI calculation and generating density.")
+        logger.debug(" FCI calculation and generating density.")
         norb = mf.mo_energy.size
         # Make for alphas and betas orbitals the same ones.
         # mo_coeffs = mf.mo_coeff  # misses beta orbitals.
@@ -471,8 +485,8 @@ def calculate_energy_and_density(
         # assert
         if np.allclose(dm, dm_fs) is False:
             # better prefer FCI dm_fs
-            logger.info("    FCI and DFT density are not the same.")
-            logger.info("    Using FCI density.")
+            logger.debug("    FCI and DFT density are not the same.")
+            logger.debug("    Using FCI density.")
             dm = dm_fs / 2.0
             dm_ao = 2.0 * mo_coeffs[0] @ dm @ mo_coeffs[0].T
 
@@ -483,6 +497,7 @@ def calculate_energy_and_density(
             max_cycle=max_cycle,
             **kwargs,
         )
+        mf.verbose = verbose
         mf.grids = grid
         # LDA should be sufficient as we just want the coordinates.
         # The orbitals are not from DFT but from CCSD/FCI.
@@ -515,10 +530,10 @@ def calculate_energy_and_density(
             f"  Method {method} for data generation is not implemented (e.g.," " ccsd, rks, fci).",
         )
 
-    logger.info(f"    Number of grid points: {coords.shape[0]}")
-    logger.info(f"    Density matrix AO shape: {dm_ao.shape}")
-    logger.info(f"    Shape of rho: {rho.shape}")
-    logger.info(f"    Energy total: {energy}")
+    logger.debug(f"    Number of grid points: {coords.shape[0]}")
+    logger.debug(f"    Density matrix AO shape: {dm_ao.shape}")
+    logger.debug(f"    Shape of rho: {rho.shape}")
+    logger.debug(f"    Energy total: {energy}")
 
     # Expose convergence on the returned mean-field object so callers (dataset
     # generation) can record it per system. Combines the reference-method
@@ -552,12 +567,12 @@ if __name__ == "__main__":
     output_dir = project_path / "data" / "td"
     generator = DataGenerator(output_dir=output_dir)
     mol, mf, dm_ao, energy, density, coords = generator.generate_data(config, save_data=True)
-    logger.info(f"Generated data for {config.name}")
-    logger.info(f"Energy: {energy}")
-    logger.info(f"Grid points: {coords.shape[0]}")
-    logger.info(f"Density: {density}")
-    logger.info(f"Density shape: {density.shape}")
-    logger.info(f"DM AO shape: {dm_ao.shape}")
-    logger.info(f"DM AO: {dm_ao}")
-    logger.info(f"Molecule: {mol}")
-    logger.info(f"Mean field: {mf}")
+    logger.debug(f"Generated data for {config.name}")
+    logger.debug(f"Energy: {energy}")
+    logger.debug(f"Grid points: {coords.shape[0]}")
+    logger.debug(f"Density: {density}")
+    logger.debug(f"Density shape: {density.shape}")
+    logger.debug(f"DM AO shape: {dm_ao.shape}")
+    logger.debug(f"DM AO: {dm_ao}")
+    logger.debug(f"Molecule: {mol}")
+    logger.debug(f"Mean field: {mf}")

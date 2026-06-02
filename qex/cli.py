@@ -18,6 +18,7 @@ For ergonomics, a bare ``qex --config ...`` (no subcommand) defaults to
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Any, Callable
 
 from qex.config import Config
@@ -162,9 +163,81 @@ def _train_command(argv: list[str]) -> int:
     return 0
 
 
+def _read_hash(path: Path) -> str | None:
+    """Read the ``config_hash`` attr of an .h5, returning None if absent/unreadable."""
+    from qex.data_io import read_config_hash
+
+    try:
+        return read_config_hash(path)
+    except Exception:  # noqa: BLE001 - a corrupt/old file just counts as a miss
+        return None
+
+
+def _gen_data_from_systems(systems_path: str, out_path: str | None, force: bool) -> int:
+    """Build a dataset straight from a declarative systems file (no training config).
+
+    This is the simple path: a YAML of molecules in, one ``.h5`` out, ready to
+    train against. Resumable -- re-running reuses systems already on disk; a
+    stale file (built for *different* systems, by content hash) or ``--force``
+    triggers a rebuild.
+    """
+    from qex.data_io import (
+        DataGenerator,
+        build_dataset,
+        load_systems_file,
+        systems_file_hash,
+    )
+
+    split_configs = load_systems_file(systems_path)
+    out = Path(out_path or "dataset.h5")
+    cfg_hash = systems_file_hash(systems_path)
+
+    if out.exists() and (force or _read_hash(out) != cfg_hash):
+        print(f"Rebuilding {out} ({'forced' if force else 'systems changed'}).")
+        out.unlink()
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    data_generator = DataGenerator(out.parent if str(out.parent) else ".")
+    print(
+        "Generating dataset (resumable) -> "
+        + " | ".join(f"{s}: {len(c)}" for s, c in split_configs.items())
+        + f"  [{out}]"
+    )
+    # Always store grid/atom-coordinate context: it is cheap (just coordinates)
+    # and makes the dataset usable by *any* model -- descriptor networks need it,
+    # others ignore the extra arrays. So one dataset serves every training config.
+    dataset = build_dataset(
+        data_generator,
+        split_configs,
+        path=out,
+        with_descriptor_ctx=True,
+        config_hash=cfg_hash,
+    )
+    print(
+        f"Dataset ready -> train: {len(dataset.train)} | "
+        f"val: {len(dataset.val)} | test: {len(dataset.test)}  [{out}]"
+    )
+    return 0
+
+
 @_register("gen-data", "Generate a single-file (HDF5) train/val/test dataset.")
 def _gen_data_command(argv: list[str]) -> int:
-    """Handler for ``qex gen-data``: build the dataset file without training."""
+    """Handler for ``qex gen-data``: build the dataset file without training.
+
+    Two ways to say what to build:
+      --systems FILE   declarative molecules YAML (no training config needed)
+      --config FILE    derive systems from an experiment config (legacy path)
+    """
+    # Simple path -- `qex gen-data --systems systems.yaml -o data.h5` -- handled
+    # first so it needs neither a training config nor a built network.
+    sys_pre = argparse.ArgumentParser(add_help=False)
+    sys_pre.add_argument("--systems")
+    sys_pre.add_argument("-o", "--output")
+    sys_pre.add_argument("--force", action="store_true")
+    sys_known, _ = sys_pre.parse_known_args(argv)
+    if sys_known.systems is not None:
+        return _gen_data_from_systems(sys_known.systems, sys_known.output, sys_known.force)
+
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config")
     known, _ = pre.parse_known_args(argv)
@@ -173,6 +246,10 @@ def _gen_data_command(argv: list[str]) -> int:
         parser = argparse.ArgumentParser(
             prog="qex gen-data",
             description="Generate a single-file HDF5 train/val/test dataset.",
+        )
+        parser.add_argument(
+            "--systems",
+            help="Declarative molecules YAML (alternative to --config; no training config needed).",
         )
         parser.add_argument("--config", required=True, help="Path to the YAML config.")
         parser.add_argument("-o", "--output", help="Output .h5 path.")
@@ -191,6 +268,13 @@ def _gen_data_command(argv: list[str]) -> int:
 
     # Imported lazily so `--help` doesn't pay the JAX/PySCF import cost.
     from qex.training import build_network, dataset_for_config
+    from qex.utils.logging import configure_logging
+
+    # gen-data doesn't go through run_experiment, so honor the log config here.
+    configure_logging(
+        debug=bool(config.get("debug", False)),
+        level=config.get("logging.level", None),
+    )
 
     _, _, _, is_descriptor = build_network(config)
     dataset = dataset_for_config(

@@ -10,6 +10,7 @@
 
 from qex.training.evaluate import (
     calculate_dissociation_profile,
+    evaluate_dataset_split,
     evaluate_samples,
     parity_plot,
     plot_dissociation_profile,
@@ -19,6 +20,7 @@ from qex.training.experiment import (
     assemble_training_data,
     build_network,
     dataset_for_config,
+    dataset_from_file,
     h2_molecule_config_factory,
     molecule_configs_for_split,
     run_experiment,
@@ -35,9 +37,11 @@ __all__ = [
     "assemble_training_data",
     "molecule_configs_for_split",
     "dataset_for_config",
+    "dataset_from_file",
     "h2_molecule_config_factory",
     # Evaluation: general (parity) + curve-specific (dissociation).
     "evaluate_samples",
+    "evaluate_dataset_split",
     "parity_plot",
     "calculate_dissociation_profile",
     "plot_dissociation_profile",

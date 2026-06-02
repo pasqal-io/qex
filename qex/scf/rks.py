@@ -29,8 +29,10 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from chex import Array
+from loguru import logger
 
 from qex.linalg.generalized_eigensolver import generalized_eigh
+from qex.linalg.ks_solvers import lobpcg_solve, mcweeny_purify
 from qex.scf.fermi import get_fractional_occupations_jax
 from qex.scf.jax_diis import apply_diis, initialize_diis
 from qex.scf.jax_diis_scan import (
@@ -64,6 +66,99 @@ def _occ_step(mo_energy: Array, nelectron: int, frac_enabled: int, **frac_kwargs
         return get_occ(nelectron, mo_energy), jnp.array(0.0)
 
     return jax.lax.cond(frac_enabled == 1, frac_branch, integer_branch, None)
+
+
+def _solve_density(
+    fock: Array,
+    s1e: Array,
+    nelectron: int,
+    frac_enabled: int,
+    solver: str,
+    frac_kwargs: dict,
+):
+    """Build the next 1-RDM from the Fock matrix via the chosen KS solver.
+
+    Returns ``(dm, energy_entr)``. Unifies the dense / LOBPCG eigen-path (which
+    yields ``(mo_energy, mo_coeff)`` and goes through occupations + make_rdm1)
+    with the purification path (which yields ``dm`` directly, no eigenvectors).
+
+    Solver / occupation compatibility (enforced below with clear errors, never
+    silent wrong numbers):
+
+    - ``"dense"``  : `generalized_eigh`. The historical default — UNCHANGED, and
+      the only solver supporting fractional occupation under the training vmap.
+      Works for any size and any `frac_enabled`. Traces to the exact same ops as
+      the original inline solve, so the default path is byte-for-byte preserved.
+
+    - ``"purify"`` : McWeeny density-matrix purification (GEMM-only, scales best
+      for large single systems). Builds the closed-shell *idempotent* density
+      directly, so it is INTEGER AUFBAU ONLY — `frac_enabled=1` is rejected
+      (purification cannot represent fractional/smeared occupations). Accepts a
+      traced `n_occ`, so it runs inside the jitted/vmapped loop.
+
+    - ``"lobpcg"`` : lowest-`n_occ` iterative eigensolve (same eigen-contract).
+      Its search-block width is an array SHAPE built from `n_occ`, so `n_occ`
+      must be a compile-time int. In the training loop `nelectron` is traced
+      (vmap over samples) -> rejected with a clear error; use it for direct
+      solves. With fractional occupation it additionally needs computed states
+      ABOVE the HOMO (a real LUMO) to smear against, i.e. a basis large enough
+      that `5*(n_occ+buffer) < n`; otherwise rejected.
+
+    `energy_entr` is 0 on the purify path (no smearing entropy).
+    """
+    n_occ = nelectron // 2
+
+    if solver == "purify":
+        # frac_enabled is a static (Python) arg in both SCF loops, so this
+        # branch is resolved at trace time — no runtime cost.
+        if frac_enabled == 1:
+            raise ValueError(
+                "solver='purify' supports integer aufbau only; set "
+                "frac_enabled=0 (or use solver='dense'/'lobpcg' for "
+                "fractional occupation)."
+            )
+        dm = mcweeny_purify(fock, s1e, n_occ=n_occ)
+        return dm, jnp.array(0.0)
+
+    if solver == "lobpcg":
+        # LOBPCG's search-block width k = n_occ + buffer sets an ARRAY SHAPE, so
+        # n_occ must be a concrete Python int at trace time. Inside the jitted
+        # SCF loop `nelectron` is traced, so n_occ here is a tracer -> LOBPCG
+        # cannot be used unless `nelectron` is made a static argument. Detect
+        # that up front and explain it, instead of letting JAX fail later with
+        # an opaque "unhashable DynamicJaxprTracer" from the solver's jit.
+        if isinstance(n_occ, jax.core.Tracer):
+            raise TypeError(
+                "solver='lobpcg' needs a static (compile-time) electron count, "
+                "but `nelectron` is traced inside the SCF loop, so n_occ is a "
+                "tracer. LOBPCG sizes its search block from n_occ, which must "
+                "be a Python int. Use solver='dense' or 'purify' for the "
+                "jitted loop (both accept a traced n_occ); LOBPCG is intended "
+                "for calling the solver directly on a fixed-size system."
+            )
+        # Fractional (Fermi-Dirac) occupation smears charge across the gap, so
+        # it needs computed states ABOVE the HOMO (a real LUMO). LOBPCG's block
+        # is capped by 5*k < n; when that leaves no room above n_occ there is no
+        # LUMO to smear and the chemical-potential solve diverges to NaN. Reject
+        # that combination up front rather than returning silent NaNs.
+        n_basis = fock.shape[-1]
+        k_max = (n_basis - 1) // 5
+        if frac_enabled == 1 and k_max <= n_occ:
+            raise ValueError(
+                f"solver='lobpcg' with fractional occupation needs LOBPCG to "
+                f"compute states above the HOMO, but the basis is too small: "
+                f"n={n_basis}, n_occ={n_occ} allow at most k={k_max} states "
+                f"(5*k < n), leaving no LUMO buffer. Use a larger basis, "
+                f"solver='dense', or set frac_enabled=0."
+            )
+        mo_energy, mo_coeff = lobpcg_solve(fock, s1e, n_occ=n_occ)
+    else:  # "dense"
+        mo_energy, mo_coeff = generalized_eigh(fock, s1e)
+
+    mo_occ, energy_entr = _occ_step(
+        mo_energy, nelectron, frac_enabled, **frac_kwargs,
+    )
+    return make_rdm1_custom(mo_coeff, mo_occ), energy_entr
 
 
 @partial(
@@ -123,7 +218,7 @@ def rks_loss(
 ) -> Array:
     """Differentiable SCF loop, returns weighted (energy + density) loss."""
 
-    print("Compiling/executing SCF loop")
+    logger.info("Compiling/executing SCF loop (rks_loss, unrolled + DIIS)")
 
     vhf, exc_energy, J = get_veff(
         dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
@@ -200,6 +295,7 @@ def rks_loss(
         "diis_min_vec",
         "diis_start_cycle",
         "diis_damping",
+        "solver",
     ),
 )
 def rks_loss_scan(
@@ -235,6 +331,7 @@ def rks_loss_scan(
     diis_min_vec: int = 2,
     diis_start_cycle: int = 1,
     diis_damping: float = 0.0,
+    solver: str = "dense",
 ) -> Array:
     """Scan-based SCF loss — same loss as `rks_loss`, DIIS optional.
 
@@ -252,9 +349,11 @@ def rks_loss_scan(
     Fractional occupations and the `ignore_ks_iter` mask are preserved.
     """
 
-    print(
-        f"Compiling/executing SCF loop (scan, "
-        f"{'with DIIS' if use_diis else 'no DIIS'})",
+    logger.info(
+        "Compiling/executing SCF loop (scan, {}, {})".format(
+            "with DIIS" if use_diis else "no DIIS",
+            "with frac. occ." if frac_enabled else "no frac. occ.",
+        )
     )
 
     frac_kwargs = dict(
@@ -300,11 +399,9 @@ def rks_loss_scan(
                 diis_state,
             )
 
-        mo_energy, mo_coeff = generalized_eigh(fock, s1e)
-        mo_occ, energy_entr = _occ_step(
-            mo_energy, nelectron, frac_enabled, **frac_kwargs,
+        dm_new, energy_entr = _solve_density(
+            fock, s1e, nelectron, frac_enabled, solver, frac_kwargs,
         )
-        dm_new = make_rdm1_custom(mo_coeff, mo_occ)
         vhf, exc_energy, J = get_veff(
             dm_new, eri, ao_grid, grid_weights, params, xc_eval_fn,
             encoding=encoding, grid_coords=grid_coords, atom_coords=atom_coords,
@@ -356,6 +453,7 @@ def rks_energy(
     frac_mu_shift: float = 0.001,
     frac_step_grad: float = 0.6,
     frac_max_steps: int = 100,
+    solver: str = "dense",
 ) -> Array:
     """Differentiable SCF loop, returns final total energy.
 
@@ -394,10 +492,9 @@ def rks_energy(
                 diis_damping,
             )
 
-        mo_energy, mo_coeff = generalized_eigh(fock, s1e)
-        mo_occ, energy_entr = _occ_step(mo_energy, nelectron, frac_enabled, **frac_kwargs)
-
-        dm = make_rdm1_custom(mo_coeff, mo_occ)
+        dm, energy_entr = _solve_density(
+            fock, s1e, nelectron, frac_enabled, solver, frac_kwargs,
+        )
 
         vhf, exc_energy, J = get_veff(
             dm, eri, ao_grid, grid_weights, params, xc_eval_fn,

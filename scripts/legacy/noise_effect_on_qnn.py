@@ -155,7 +155,7 @@ def evaluate_with_noise(
         Dictionary of results for each noise scale
     """
     # Load dataset
-    base_path = project_path / "data" / "od"
+    base_path = project_path / "data" / "legacy" / "od"
     list_datasets = load_molecular_datasets_from_config(
         config_dict,
         base_path,

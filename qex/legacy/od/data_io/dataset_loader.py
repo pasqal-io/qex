@@ -28,7 +28,7 @@ def load_molecular_datasets(
         molecule_names = ['h2']
         datasets_params = {'dataset1': [174, 348]}
         num_grids = {'h2': 512}
-        base_path = Path('data/od')
+        base_path = Path('data/legacy/od')
 
     Args:
         molecule_names: A list of molecule names corresponding to dataset paths.
@@ -176,6 +176,6 @@ if __name__ == "__main__":
     project_path = Path(os.path.dirname(os.path.dirname(qex.__file__)))
     load_molecular_datasets_from_config(
         config,
-        project_path / "data/od",
+        project_path / "data/legacy/od",
         check_grid_centering=True,
     )

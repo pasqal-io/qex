@@ -109,9 +109,15 @@ def entropy(fermi_distr: float | jnp.ndarray) -> float | jnp.ndarray:
     Returns:
         Entropy contribution.
     """
-    return fermi_distr * jnp.log(fermi_distr) + (1 - fermi_distr) * jnp.log(
-        1 - fermi_distr,
-    )
+    # Use xlogy so the fully-empty / fully-occupied limits give 0, not NaN:
+    # f*log(f) -> 0 as f -> 0 (mathematically 0), but plain f*log(f) evaluates
+    # 0*(-inf) = NaN. This matters when the spectrum contains states pinned to
+    # occupation 0 or 1 — e.g. LOBPCG pads the unconverged high-lying states
+    # with a large energy, giving f exactly 0, which previously poisoned the
+    # entropy sum with NaN.
+    from jax.scipy.special import xlogy
+
+    return xlogy(fermi_distr, fermi_distr) + xlogy(1 - fermi_distr, 1 - fermi_distr)
 
 
 @jax.jit

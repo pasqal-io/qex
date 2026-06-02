@@ -1,0 +1,75 @@
+# Train an XC functional from a PRE-BUILT dataset (.h5). This is the decoupled
+# path: the molecules + reference data were generated separately, so training
+# never runs PySCF -- it reads tensors straight from the file.
+#
+# Build the dataset first, then train:
+#     qex gen-data --systems examples/systems_h2.yaml -o data/h2.h5
+#     qex train --config examples/train_from_dataset.yaml
+# Reuse this same config for another dataset by overriding the path:
+#     qex train --config examples/train_from_dataset.yaml --data.dataset_file data/h2o.h5
+#
+# Compared to examples/h2.yaml, the `data` block carries NO geometries (they live
+# in the dataset) and no dissociation-curve settings (curve eval is the H2
+# example's special case; here evaluation is the dataset's test-set parity plot).
+
+rng: 42
+platform: cpu
+output_dir: results/from_dataset
+
+model:
+  type: descriptor
+  encoding: global
+  exp_model: density
+  n_grid: 1240
+  n_atom: 2
+  vxc_grad_scale: 1.0
+  hidden_layers: [128, 128, 128, 128, 128]
+
+  descriptor:
+    alphas: [0.5, 1.0, 2.0, 4.0]
+    scale: 1.0
+    rho_floor: 1.0e-10
+
+  qcnn:
+    n_qubits: 2
+    n_features: 2
+    n_layers: 2
+    n_var_layers: 1
+    feature_map: direct
+    head_features: [32]
+    gate_noise: []
+    gaussian_noise_std: 0.0
+
+data:
+  # The pre-built dataset to train/eval on. If this file exists, training loads
+  # it directly (no generation). Override on the CLI to point at another .h5.
+  dataset_file: data/h2.h5
+
+training:
+  learning_rate: 1.0e-4
+  n_iterations: 1000
+  log_every: 5
+  energy_weight: 1.0
+  density_weight: 1.0
+  grad_clip: 0.5
+  n_val_iter: 50
+  patience: 5
+
+# SCF / KS-solve settings. `run_experiment` reads these from `scf.*` (see
+# qex.training.experiment._scf_kwargs). `dense` is exact and the only fully
+# supported solver under the training vmap; see examples/h2.yaml for the
+# solver/fractional-occupation trade-offs.
+scf:
+  solver: dense
+  max_cycle: 15
+  use_diis: true
+  diis_max_vec: 15
+  diis_min_vec: 2
+  diis_start_cycle: 1
+  diis_damping: 0.0
+  frac_enabled: 0
+  frac_theta: 0.04
+  frac_mu: null
+  frac_mu_shift: 0.001
+  frac_step_grad: 0.6
+  frac_max_steps: 100

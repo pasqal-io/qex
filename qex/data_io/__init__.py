@@ -20,10 +20,13 @@ from qex.data_io.dataset import (
     save_dataset,
 )
 from qex.data_io.dataset_generation import DataGenerator, MoleculeConfig
+from qex.data_io.systems_file import load_systems_file, systems_file_hash
 
 __all__ = [
     "DataGenerator",
     "MoleculeConfig",
+    "load_systems_file",
+    "systems_file_hash",
     "Datapoint",
     "QexDataset",
     "datapoint_uid",

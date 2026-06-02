@@ -47,7 +47,7 @@ class BaseKSDFTTrainer(ABC):
         if data_path is None:
             project_path = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             data_dir = "od" if self.__class__.__name__.startswith("KSDFT") else "td"
-            self.data_path = project_path.parent / "data" / data_dir
+            self.data_path = project_path.parent / "data" / "legacy" / data_dir
         else:
             self.data_path = data_path
 

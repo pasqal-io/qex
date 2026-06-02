@@ -22,10 +22,12 @@ from pathlib import Path
 import jax
 import numpy as np
 import optax
+from loguru import logger
 
 from qex import Config
 from qex.data_io import DataGenerator
 from qex.scf import rks_energy, rks_loss_scan
+from qex.utils.logging import configure_logging
 from qex.training import (
     build_network,
     calculate_dissociation_profile,
@@ -60,11 +62,23 @@ def _scf_kwargs(config: Config) -> dict:
         frac_mu_shift=config.get("scf.frac_mu_shift", 0.001),
         frac_step_grad=config.get("scf.frac_step_grad", 0.6),
         frac_max_steps=config.get("scf.frac_max_steps", 100),
+        # KS "solve" step: "dense" (default generalized_eigh), "lobpcg"
+        # (lowest-N_occ iterative), or "purify" (McWeeny density-matrix
+        # purification; integer aufbau only, i.e. needs scf.frac_enabled=0).
+        # Accepted by both rks_loss_scan (train) and rks_energy (eval).
+        solver=config.get("scf.solver", "dense"),
     )
 
 
 def main() -> None:
     config = Config(config_path=str(CONFIG_PATH))
+
+    # Quiet by default. `logging.level` (TRACE/DEBUG/INFO/...) is the global
+    # verbosity knob; `debug: true` is a shortcut for level=DEBUG.
+    configure_logging(
+        debug=bool(config.get("debug", False)),
+        level=config.get("logging.level", None),
+    )
 
     jax.config.update("jax_enable_x64", True)
     jax.config.update("jax_platform_name", config.get("platform", "cpu"))
@@ -92,9 +106,11 @@ def main() -> None:
     training_data = dataset.training_tuples("train")
     val_data = dataset.training_tuples("val")
     test_configs = [dp.meta for dp in dataset.test]
-    print(
-        f"Data split -> train: {len(training_data)} | "
-        f"val: {len(val_data)} | test: {len(test_configs)}"
+    logger.info(
+        "Data split -> train: {} | val: {} | test: {}",
+        len(training_data),
+        len(val_data),
+        len(test_configs),
     )
 
     # 3. Optimizer: Adam with optional global-norm gradient clipping.
@@ -162,6 +178,7 @@ def main() -> None:
         basis=config.get("data.basis", "631g"),
         units=config.get("data.units", "Ang"),
         grid_density=config.get("data.grid_density", 0),
+        verbose=config.get("data.verbose", 0),
         path_results=output_dir,
         pass_descriptor_ctx=is_descriptor,
         **scf_kwargs,

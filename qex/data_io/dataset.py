@@ -95,6 +95,7 @@ from typing import Any
 import h5py
 import jax.numpy as jnp
 import numpy as np
+from loguru import logger
 
 from qex.data_io.dataset_generation import DataGenerator, MoleculeConfig
 
@@ -183,11 +184,17 @@ class Datapoint:
         """Construct a failure record for a system that did not converge/raised."""
         return cls(meta=meta, converged=False, error=error)
 
-    def to_training_tuple(self) -> tuple:
+    def to_training_tuple(self, *, include_descriptor_ctx: bool = True) -> tuple:
         """Pack into the ``(energy, coords_density, precomputed, dm)`` tuple.
 
         This is exactly the structure consumed by :func:`qex.train` and the
         SCF loops, so loading a dataset is a drop-in for inline generation.
+
+        ``include_descriptor_ctx`` controls whether stored grid/atom coordinates
+        are appended to ``precomputed``. A dataset is generally built *with*
+        context (so it serves any model), but a non-descriptor model can't accept
+        those extra args -- the consumer passes ``False`` to drop them. No-op when
+        the datapoint has no context.
         """
         if not self.converged:
             raise ValueError(
@@ -203,7 +210,7 @@ class Datapoint:
             float(self.energy_nuc),
             int(self.nelectron),
         ]
-        if self.has_descriptor_ctx:
+        if include_descriptor_ctx and self.has_descriptor_ctx:
             precomputed.append(jnp.asarray(self.grid_coords))
             precomputed.append(jnp.asarray(self.atom_coords))
         coords_density = jnp.c_[jnp.asarray(self.coords), jnp.asarray(self.density)]
@@ -233,9 +240,19 @@ class QexDataset:
         """Count of non-converged (failure) records in a split."""
         return sum(1 for dp in self.split(name) if not dp.converged)
 
-    def training_tuples(self, name: str) -> list[tuple]:
-        """The split's *converged* datapoints as training tuples (see Datapoint)."""
-        return [dp.to_training_tuple() for dp in self.converged(name)]
+    def training_tuples(
+        self, name: str, *, include_descriptor_ctx: bool = True
+    ) -> list[tuple]:
+        """The split's *converged* datapoints as training tuples (see Datapoint).
+
+        ``include_descriptor_ctx=False`` drops stored grid/atom context so the
+        tuples suit a non-descriptor model (see
+        :meth:`Datapoint.to_training_tuple`).
+        """
+        return [
+            dp.to_training_tuple(include_descriptor_ctx=include_descriptor_ctx)
+            for dp in self.converged(name)
+        ]
 
     def uids(self, name: str) -> set[str]:
         """uids already present in a split (for resume/skip)."""
@@ -538,8 +555,10 @@ def build_dataset(
         for split in ("train", "val", "test"):
             for cfg in split_configs.get(split, []):
                 dp = _datapoint_from_generation(data_generator, cfg, with_descriptor_ctx)
-                status = "ok" if dp.converged else f"FAILED ({dp.error})"
-                print(f"  [{split}] {cfg.name}: {status}")
+                if dp.converged:
+                    logger.debug("[{}] {}: ok", split, cfg.name)
+                else:
+                    logger.warning("[{}] {}: FAILED ({})", split, cfg.name, dp.error)
                 dataset.split(split).append(dp)
         return dataset
 
@@ -555,11 +574,13 @@ def build_dataset(
             # Skip if present AND (converged, or failed-but-not-retrying).
             if already and not (is_failed and retry_failed):
                 if already:
-                    print(f"  [{split}] {cfg.name}: skip (cached)")
+                    logger.debug("[{}] {}: skip (cached)", split, cfg.name)
                 continue
             dp = _datapoint_from_generation(data_generator, cfg, with_descriptor_ctx)
-            status = "ok" if dp.converged else f"FAILED ({dp.error})"
-            print(f"  [{split}] {cfg.name}: {status}")
+            if dp.converged:
+                logger.debug("[{}] {}: ok", split, cfg.name)
+            else:
+                logger.warning("[{}] {}: FAILED ({})", split, cfg.name, dp.error)
             append_datapoint(path, split, dp)
 
     return load_dataset(path)

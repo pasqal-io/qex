@@ -79,7 +79,7 @@ def evaluate_with_noise(config_dict, noise_levels=[0.0, 0.01, 0.05, 0.1, 0.2, 0.
         Dictionary of results for each noise level
     """
     # Load dataset
-    base_path = project_path / "data" / "od"
+    base_path = project_path / "data" / "legacy" / "od"
     list_datasets = load_molecular_datasets_from_config(
         config_dict,
         base_path,

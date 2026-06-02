@@ -1,0 +1,44 @@
+# Declarative *systems file*: WHICH molecules to compute reference data for, and
+# HOW (basis / method / grid). This is the simple input to dataset generation --
+# independent of any model or training settings.
+#
+# Three-step workflow:
+#   1. Edit this file (add/remove molecules).
+#   2. Build the dataset once:
+#        qex gen-data --systems examples/systems_h2.yaml -o data/h2.h5
+#   3. Train against it (many times, no PySCF re-runs):
+#        qex train --config examples/train_from_dataset.yaml --data.dataset_file data/h2.h5
+#
+# `defaults` are applied to every entry below; any entry may override a field
+# (see LiH using a different basis). Each entry needs at least `name` and
+# `atom_coords`; the rest fall back to `defaults`. Generation is resumable --
+# rebuild only happens if the systems here change.
+
+defaults:
+  method: ccsd        # reference method: ccsd / fci / rks
+  basis: 631g         # e.g. sto-3g, 631g, cc-pvdz, cc-pvtz
+  units: Ang          # "Ang" or "B" (Bohr)
+  grid_density: 0     # DFT grid level 0 (sparse) .. 9 (dense)
+
+# Bond lengths in Angstrom. Keep the three splits disjoint for an honest metric.
+train:
+  - {name: H2_0.50, atom_coords: "H 0 0 0; H 0 0 0.50"}
+  - {name: H2_0.74, atom_coords: "H 0 0 0; H 0 0 0.74"}
+  - {name: H2_1.00, atom_coords: "H 0 0 0; H 0 0 1.00"}
+  - {name: H2_1.50, atom_coords: "H 0 0 0; H 0 0 1.50"}
+  - {name: H2_2.00, atom_coords: "H 0 0 0; H 0 0 2.00"}
+  - {name: H2_2.50, atom_coords: "H 0 0 0; H 0 0 2.50"}
+  - {name: H2_3.00, atom_coords: "H 0 0 0; H 0 0 3.00"}
+
+val:
+  - {name: H2_0.60, atom_coords: "H 0 0 0; H 0 0 0.60"}
+  - {name: H2_0.90, atom_coords: "H 0 0 0; H 0 0 0.90"}
+  - {name: H2_1.20, atom_coords: "H 0 0 0; H 0 0 1.20"}
+
+test:
+  - {name: H2_0.80, atom_coords: "H 0 0 0; H 0 0 0.80"}
+  - {name: H2_1.30, atom_coords: "H 0 0 0; H 0 0 1.30"}
+  - {name: H2_1.75, atom_coords: "H 0 0 0; H 0 0 1.75"}
+  - {name: H2_2.25, atom_coords: "H 0 0 0; H 0 0 2.25"}
+  # A heterogeneous example: different molecule AND a per-entry basis override.
+  - {name: LiH, atom_coords: "Li 0 0 0; H 0 0 1.60", basis: 6-31g}

@@ -24,6 +24,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+from loguru import logger
 from tqdm import tqdm
 
 from qex.scf.operators import get_ao_value
@@ -75,7 +76,7 @@ def evaluate_samples(
     reference: list[float] = []
 
     if verbose:
-        print(f"\nRunning {label} over {len(molecule_configs)} molecule(s)...")
+        logger.info("Running {} over {} molecule(s)...", label, len(molecule_configs))
     iterator = tqdm(molecule_configs) if verbose else molecule_configs
     for cfg in iterator:
         mol, mf, dm, ref_energy, _density, _coords = data_generator.generate_data(
@@ -97,12 +98,97 @@ def evaluate_samples(
             scf_args.append(jnp.asarray(mf.grids.coords))
             scf_args.append(jnp.asarray(mol.atom_coords()))
 
-        predicted.append(float(scf_eval_jit(*scf_args)))
+        pred_energy = float(scf_eval_jit(*scf_args))
+        predicted.append(pred_energy)
+        reference.append(float(ref_energy))
+        logger.debug(
+            "[{}] {}: pred={:.6f} Ha ref={:.6f} Ha (Δ={:.2e})",
+            label,
+            cfg.name,
+            pred_energy,
+            float(ref_energy),
+            pred_energy - float(ref_energy),
+        )
+
+    predicted = np.array(predicted)
+    reference = np.array(reference)
+    metrics = _metrics(predicted, reference)
+    logger.debug(
+        "{} done -> MAE {:.3e} Ha | NPE {:.3e} Ha",
+        label,
+        metrics["mae"],
+        metrics["npe"],
+    )
+    return predicted, reference, metrics
+
+
+def evaluate_dataset_split(
+    params: dict[str, Any],
+    datapoints: list,
+    *,
+    scf_energy_fn: Callable,
+    xc_eval_fn: Callable,
+    pass_descriptor_ctx: bool = False,
+    label: str = "evaluation",
+    verbose: bool = True,
+    **scf_kwargs,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Evaluate the trained functional over stored :class:`Datapoint`\\ s.
+
+    The dataset-only counterpart to :func:`evaluate_samples`: instead of
+    re-running PySCF per molecule, it consumes the precomputed tensors already
+    saved in each datapoint (via :meth:`Datapoint.to_training_tuple`). So a run
+    that trains from a pre-built ``.h5`` never imports PySCF for evaluation
+    either.
+
+    Args:
+        datapoints: converged :class:`qex.data_io.Datapoint`\\ s (e.g.
+            ``dataset.converged("test")``); failure records must be filtered out.
+        scf_energy_fn / xc_eval_fn / scf_kwargs: as in :func:`evaluate_samples`.
+        pass_descriptor_ctx: forward grid/atom coords (descriptor networks); the
+            datapoints must carry them (built ``with_descriptor_ctx=True``).
+
+    Returns:
+        ``(predicted, reference, metrics)`` aligned with ``datapoints``.
+    """
+    scf_eval_jit = jax.jit(partial(scf_energy_fn, xc_eval_fn=xc_eval_fn, **scf_kwargs))
+
+    predicted: list[float] = []
+    reference: list[float] = []
+
+    if verbose:
+        logger.info("Running {} over {} stored datapoint(s)...", label, len(datapoints))
+    iterator = tqdm(datapoints) if verbose else datapoints
+    for dp in iterator:
+        ref_energy, _coords_density, precomputed, dm = dp.to_training_tuple()
+        # `precomputed` is (eri, ao_grid, weights, ovlp, hcore, e_nuc, nelectron)
+        # and, iff the datapoint carries descriptor context, (grid_coords,
+        # atom_coords) appended -- the exact arg order `scf_energy_fn` expects.
+        precomputed = list(precomputed)
+        scf_args = [params, dm, *precomputed[:7]]
+        if pass_descriptor_ctx:
+            if not dp.has_descriptor_ctx:
+                raise ValueError(
+                    f"{dp.meta.name!r}: descriptor context requested but the "
+                    "datapoint was built without it (rebuild with "
+                    "with_descriptor_ctx=True)."
+                )
+            scf_args.extend(precomputed[7:9])
+
+        pred_energy = float(scf_eval_jit(*scf_args))
+        predicted.append(pred_energy)
         reference.append(float(ref_energy))
 
     predicted = np.array(predicted)
     reference = np.array(reference)
-    return predicted, reference, _metrics(predicted, reference)
+    metrics = _metrics(predicted, reference)
+    logger.debug(
+        "{} done -> MAE {:.3e} Ha | NPE {:.3e} Ha",
+        label,
+        metrics["mae"],
+        metrics["npe"],
+    )
+    return predicted, reference, metrics
 
 
 def parity_plot(
@@ -182,6 +268,7 @@ def calculate_dissociation_profile(
     basis: str = "631g",
     units: str = "Ang",
     grid_density: int = 0,
+    verbose: int = 0,
     path_results: str | None = None,
     pass_descriptor_ctx: bool = False,
     **scf_kwargs,
@@ -191,13 +278,29 @@ def calculate_dissociation_profile(
     A curve-specific convenience wrapper around :func:`evaluate_samples`:
     it builds the per-geometry molecule configs from ``molecule_config_factory``
     and returns the energies aligned with ``bond_lengths``.
+
+    ``verbose`` is PySCF's own print level for the reference solver, forwarded
+    to each per-geometry :class:`MoleculeConfig` (0 = silent).
     """
     if bond_lengths is None:
         bond_lengths = np.linspace(0.5, 3.0, 20)
 
+    logger.info(
+        "Computing dissociation profile over {} geometries "
+        "(method={}, basis={})",
+        len(bond_lengths),
+        method,
+        basis,
+    )
+
     molecule_configs = [
         molecule_config_factory(
-            d, method=method, basis=basis, units=units, grid_density=grid_density
+            d,
+            method=method,
+            basis=basis,
+            units=units,
+            grid_density=grid_density,
+            verbose=verbose,
         )
         for d in bond_lengths
     ]
@@ -217,6 +320,7 @@ def calculate_dissociation_profile(
         np.save(f"{path_results}/dissociation_bond_lengths.npy", bond_lengths)
         np.save(f"{path_results}/dissociation_ml_energies.npy", ml_energies)
         np.save(f"{path_results}/dissociation_ref_energies.npy", ref_energies)
+        logger.info("Saved dissociation arrays to {}", path_results)
 
     return bond_lengths, ml_energies, ref_energies
 

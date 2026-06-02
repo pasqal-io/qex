@@ -11,6 +11,18 @@ rng: 42
 platform: cpu                       # "cpu" or "gpu"
 output_dir: results/h2_dissociation
 
+# Logging verbosity. Quiet by default (WARNING+): a normal run shows only the
+# tqdm progress bar plus warnings (e.g. non-converged systems). Turn on the
+# verbose event log (data gen, SCF compile, per-geometry eval) two ways:
+#   debug: true            -> shortcut for logging.level: DEBUG
+#   logging.level: <LEVEL> -> global knob; an explicit level always wins.
+# Levels, low -> high: TRACE, DEBUG, INFO, SUCCESS, WARNING, ERROR, CRITICAL.
+# TRACE prints absolutely everything; INFO shows only the critical pipeline
+# milestones (network built, data split, training start, eval results).
+debug: false
+logging:
+  level: INFO                       # e.g. TRACE / DEBUG / INFO; null -> use `debug`
+
 model:
   # "descriptor" (DescriptorXC, grid-size invariant; encoding must be "global"),
   # "mlp"        (LocalMLP for local / GlobalMLP for global encoding),
@@ -49,9 +61,22 @@ model:
 
 data:
   method: ccsd                      # reference method
+  # Basis sets: "sto-3g", "6-31g", "cc-pvdz", "cc-pvqz", "cc-pvtz", etc.
   basis: 631g
   units: Ang
   grid_density: 0
+  # PySCF's OWN print level for the reference solver (CCSD/RKS/FCI). This is the
+  # solver's stdout (SCF iteration table, timings), separate from QEX's loguru
+  # log above. 0 = silent (default), 3 = normal SCF table, 4 = info, 5+ = debug.
+  verbose: 0
+  # Path to the precomputed single-file (HDF5) dataset. This .h5 IS the cache and
+  # the checkpoint: generation writes each system as it finishes, so a run that
+  # is killed/diverges can be restarted (completed systems are reused). null ->
+  # default to <output_dir>/dataset.h5. Point it at an existing file to reuse
+  # precomputed reference data instead of regenerating it.
+  dataset_file: null
+  # Set false to build the dataset in memory only (no .h5 written/reused).
+  cache_dataset: true
   # Explicit train / validation / test split (bond lengths in Angstrom).
   # Keep the three sets disjoint for an honest test metric.
   train_bond_lengths: [0.5, 0.74, 1.0, 1.5, 2.0, 2.5, 3.0]
@@ -82,7 +107,26 @@ training:
   n_val_iter: 50
   patience: 5
 
-scf:
+  # KS "solve" step inside each SCF cycle. Choose based on system size AND
+  # whether fractional occupation (scf.frac_enabled below) is on:
+  #
+  #   solver   frac_enabled=1 (smearing)   frac_enabled=0 (integer)   notes
+  #   ------   -------------------------   ------------------------   -----
+  #   dense    YES (default, this example) YES                        exact;
+  #            best for small systems; works under the training vmap.
+  #   purify   NO  -> raises ValueError    YES                        GEMM-only,
+  #            density-matrix purification; scales best for large single systems.
+  #   lobpcg   only when basis is large    only when basis is large   iterative;
+  #            enough for a LUMO buffer     (needs 5*N_occ < n_basis)  lowest-k
+  #            (5*(N_occ+buffer)<n_basis)                              eigenpairs.
+  #            NOTE: lobpcg cannot run in the *training* loop at all — it needs a
+  #            compile-time electron count, but training vmaps over samples so
+  #            N_occ is traced. It raises a clear TypeError there. Use it only
+  #            for direct/large-single-system solves with solver='dense' default.
+  #
+  # This H2 example uses fractional occupation (frac_enabled: 1, needed for the
+  # dissociation tail), so dense is the correct and only fully-supported choice.
+  solver: dense
   max_cycle: 15
   use_diis: true
   diis_max_vec: 15
@@ -90,7 +134,7 @@ scf:
   diis_start_cycle: 1
   diis_damping: 0.0
   # Fractional-occupation (finite-temperature) smearing.
-  frac_enabled: 1
+  frac_enabled: 0
   frac_theta: 0.04
   frac_mu: null
   frac_mu_shift: 0.001
