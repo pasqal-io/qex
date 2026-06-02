@@ -117,13 +117,21 @@ class DataGenerator:
     def generate_data(
         self,
         config: MoleculeConfig,
-        save_data: bool = True,
+        save_data: bool = False,
     ) -> tuple[gto.Mole, Any, FloatArray, float, FloatArray, FloatArray]:
-        """Generates and saves molecular data based on configuration.
+        """Compute molecular electronic-structure data for one system.
+
+        This method is pure by default: it only computes and returns the data.
+        Persistence is handled by the single-file HDF5 dataset
+        (:class:`qex.data_io.QexDataset` + :func:`qex.data_io.save_dataset`), so
+        normal use creates no files or per-geometry folders.
+
+        Set ``save_data=True`` only for the opt-in legacy ``.npy``/``.chdens``
+        scatter under ``output_dir/<name>/`` (creates that folder on demand).
 
         Args:
-            config: Complete molecule specification
-            save_data: Whether to save the data to files
+            config: Complete molecule specification.
+            save_data: If True, also write the legacy per-geometry files.
         Returns:
             Tuple containing:
                 - Molecule object
@@ -159,22 +167,18 @@ class DataGenerator:
             max_memory=config.max_memory,
         )
 
-        # Setup file paths
-        prefix = self._get_filepath_prefix(config)
-        filepath_energy = f"{prefix}-energy.npy"
-        filepath_coords = f"{prefix}-coords.npy"
-        filepath_density = f"{prefix}-density.chdens"
-        filepath_density_npy = f"{prefix}-density.npy"
-        filepath_dm_ao = f"{prefix}-dm_ao.npy"
-
-        # Save data
+        # Optional legacy persistence. Only here do we touch the filesystem:
+        # the output folder is created on demand, so a pure (non-saving) call
+        # leaves no empty per-geometry directories behind.
         if save_data:
-            np.save(filepath_energy, energy)
-            np.save(filepath_coords, coords)
-            np.save(filepath_density_npy, density)
-            np.save(filepath_dm_ao, dm_ao)
+            prefix = self._get_filepath_prefix(config)
+            np.save(f"{prefix}-energy.npy", energy)
+            np.save(f"{prefix}-coords.npy", coords)
+            np.save(f"{prefix}-density.npy", density)
+            np.save(f"{prefix}-dm_ao.npy", dm_ao)
 
             # Save density in chdens format
+            filepath_density = f"{prefix}-density.chdens"
             with open(filepath_density, "w") as f:
                 for i in range(coords.shape[0]):
                     for j in range(coords.shape[1]):
@@ -363,6 +367,8 @@ def calculate_energy_and_density(
 
         exact_density = rho.flatten()
         exact_energy = energy
+        # RKS reference: convergence is just the DFT SCF's own flag.
+        method_converged = bool(getattr(mf, "converged", True))
 
     elif method.lower() == "ccsd":
         # Run SCF and use CCSD to get RDMs.
@@ -372,6 +378,10 @@ def calculate_energy_and_density(
         mycc = cc.CCSD(mf).run()
         mycc.kernel()
         energy = mycc.e_tot
+        # Reference converged only if BOTH the underlying RHF and CCSD did.
+        method_converged = bool(
+            getattr(mf, "converged", True) and getattr(mycc, "converged", True)
+        )
         if use_ccsd_triples_correction:
             et = mycc.ccsd_t()  # works only when not reading FCIDUMP file.
             logger.info(f"    CCSD(T) correction: {et}")
@@ -497,6 +507,8 @@ def calculate_energy_and_density(
 
         exact_density = rho.flatten()
         exact_energy = energy
+        # FCI is a direct diagonalisation; convergence is the SCF reference's.
+        method_converged = bool(getattr(mf, "converged", True))
 
     else:
         raise ValueError(
@@ -507,6 +519,11 @@ def calculate_energy_and_density(
     logger.info(f"    Density matrix AO shape: {dm_ao.shape}")
     logger.info(f"    Shape of rho: {rho.shape}")
     logger.info(f"    Energy total: {energy}")
+
+    # Expose convergence on the returned mean-field object so callers (dataset
+    # generation) can record it per system. Combines the reference-method
+    # convergence with the final grid-evaluation SCF's own flag.
+    mf.qex_converged = bool(method_converged and getattr(mf, "converged", True))
 
     return (
         mol,

@@ -102,7 +102,17 @@ def get_veff(
             dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
             grid_coords=grid_coords, atom_coords=atom_coords,
         )
-    raise ValueError(f"Unknown XC encoding: {encoding!r} (expected 'local' or 'global').")
+    if encoding == "libxc":
+        # Reference path: a standard PySCF/libxc functional (LDA/GGA/mGGA/hybrid)
+        # driven through this same SCF loop to validate it against PySCF. The
+        # ingredients (AO value+gradient arrays, xc code, hybrid coeff) ride in
+        # `params`; see `qex.functionals.libxc_veff.make_libxc_ingredients`.
+        from qex.functionals.libxc_veff import get_veff_libxc
+
+        return get_veff_libxc(dm, eri, ao_grid, grid_weights, params, xc_eval_fn)
+    raise ValueError(
+        f"Unknown XC encoding: {encoding!r} (expected 'local', 'global', or 'libxc')."
+    )
 
 
 def energy_tot(dm: Array, h1e: Array, J: Array, exc_energy: Array, energy_nuc: float) -> Array:

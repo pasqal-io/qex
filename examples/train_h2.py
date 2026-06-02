@@ -1,273 +1,188 @@
-"""Train an MLP XC functional on H₂ (CCSD reference) and plot the dissociation curve.
+"""Train an XC functional on H2 (CCSD reference) and plot the dissociation curve.
 
-Self-contained entry point: imports the qex library and runs end-to-end.
+This is the *explicit* example: it spells out every step of the pipeline so you
+can read the wiring top to bottom and adapt it. It calls the same public library
+functions that the ``qex train`` CLI uses under the hood, so there is no
+duplicated plumbing -- only the orchestration is laid bare here.
+
+For a one-liner equivalent, see ``qex.run_experiment`` (or just run
+``qex train --config examples/h2.yaml``). Reach for this script when you want to
+change *how* the pieces fit together (custom data, a different loss, extra
+logging) rather than just *which* settings are used.
+
+Run it directly::
+
+    python examples/train_h2.py
+
+Settings live in ``examples/h2.yaml`` and are loaded into a :class:`qex.Config`.
 """
 
-import flax.linen as nn
+from pathlib import Path
+
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
-from jax import random
 
-from qex.data_io.dataset_generation import DataGenerator, MoleculeConfig
-from qex.functionals.descriptor import DescriptorXC
-from qex.functionals.mlp import GlobalMLP, LocalMLP
-from qex.functionals.qcnn import QCNN
-from qex.functionals.xc import make_eval_xc_global, make_eval_xc_local
-# from qex.legacy.td.train import patch_pyscfad
-from qex.scf.operators import get_ao_value
-from qex.scf.rks import rks_energy, rks_loss, rks_loss_scan
-from qex.training.evaluate import (
+from qex import Config
+from qex.data_io import DataGenerator
+from qex.scf import rks_energy, rks_loss_scan
+from qex.training import (
+    build_network,
     calculate_dissociation_profile,
+    dataset_for_config,
+    evaluate_samples,
+    h2_molecule_config_factory,
+    parity_plot,
     plot_dissociation_profile,
+    train,
 )
-from qex.training.train import train
 
-# patch_pyscfad()
-jax.config.update("jax_enable_x64", True)
+CONFIG_PATH = Path(__file__).with_name("h2.yaml")
 
-
-CONFIG = {
-    "rng": 42,
-    "method": "ccsd",
-    "basis": "631g",
-    "units": "Ang",
-    "grid_density": 0,
-    "learning_rate": 1e-4,
-    "n_iterations": 500,
-    "energy_weight": 1.0,
-    "density_weight": 1.0,
-    "max_cycle": 15,
-    "use_diis": True,
-    "diis_max_vec": 15,
-    "diis_min_vec": 2,
-    "diis_start_cycle": 1,
-    "diis_damping": 0.0,
-    "frac_enabled": 1,
-    "frac_theta": 0.04,
-    "frac_max_steps": 100,
-    "frac_mu": None,
-    "frac_mu_shift": 0.001,
-    "frac_step_grad": 0.6,
-    "vxc_grad_scale": 1.0,
-    "platform": "cpu",
-    "output_dir": "results/h2_dissociation",
-    "grad_clip": 0.5,
-    "exp_model": "density",
-    # "local": network outputs exc(r) per electron at each grid point
-    #          (LDA-style; E_xc assembled outside as Σ exc·rho·w).
-    # "global": network outputs the scalar E_xc[ρ] directly (already integrated).
-    "encoding": "global",
-    "n_grid": 1240,  # only used to size GlobalMLP's first Dense layer
-    # "mlp" (LocalMLP for local / GlobalMLP for global),
-    # "descriptor"
-    # (DescriptorXC — only valid with encoding="global"; grid-size invariant),
-    # or "qcnn" (quantum convolutional network; encoding="global" only).
-    "model": "descriptor",
-    "n_atom": 2,
-    # Global: [128, 128, 128, 128, 128]
-    # Local: [32, 32]
-    "hidden_layers":  [128, 128, 128, 128, 128],
-    # Descriptor parameters
-    "descriptor_alphas": (0.5, 1.0, 2.0, 4.0),
-    "descriptor_scale": 1.0,
-    "descriptor_rho_floor": 1e-10,
-    # QCNN parameters. `n_grid` must be divisible by qcnn_n_features ** qcnn_n_layers.
-    "qcnn_n_qubits": 2,
-    "qcnn_n_features": 2,
-    "qcnn_n_layers": 2,
-    "qcnn_n_var_layers": 1,
-    "qcnn_feature_map": "direct",
-    "qcnn_head_features": (32,),
-    # QCNN noise. `qcnn_gate_noise` is a list of (type, probability) pairs applied
-    # to every gate in the feature map and ansatz; types: "bitflip",
-    # "amplitude_damping", "depolarizing", "phaseflip" (any horqrux DigitalNoiseType).
-    # `qcnn_gaussian_noise_std` adds Gaussian noise to each layer's output to
-    # emulate sampling/readout noise (0 disables it).
-    "qcnn_gate_noise": [],  # e.g. [("bitflip", 0.01), ("amplitude_damping", 0.01)]
-    "qcnn_gaussian_noise_std": 0.0,
-}
-
-jax.config.update("jax_platform_name", CONFIG["platform"])
+# SCF kwargs the scan loop (`rks_loss_scan`) does not accept; stripped at train
+# time and kept for the DIIS-based evaluation loop (`rks_energy`).
+_DIIS_ONLY_KEYS = ("diis_max_vec", "diis_min_vec", "diis_start_cycle", "diis_damping")
 
 
-def _h2_molecule_config(bond_length, *, method, basis, units, grid_density):
-    return MoleculeConfig(
-        name=f"H2_{bond_length:.2f}",
-        atom_coords=f"H 0 0 0; H 0 0 {bond_length}",
-        units=units,
-        basis=basis,
-        method=method,
-        grid_density=grid_density,
-    )
-
-
-def _scf_kwargs():
+def _scf_kwargs(config: Config) -> dict:
+    """Collect the SCF / fractional-occupation kwargs from the config."""
     return dict(
-        encoding=CONFIG["encoding"],
-        max_cycle=CONFIG["max_cycle"],
-        use_diis=CONFIG["use_diis"],
-        diis_max_vec=CONFIG["diis_max_vec"],
-        diis_min_vec=CONFIG["diis_min_vec"],
-        diis_start_cycle=CONFIG["diis_start_cycle"],
-        diis_damping=CONFIG["diis_damping"],
-        frac_enabled=CONFIG["frac_enabled"],
-        frac_theta=CONFIG["frac_theta"],
-        frac_mu=CONFIG["frac_mu"],
-        frac_mu_shift=CONFIG["frac_mu_shift"],
-        frac_step_grad=CONFIG["frac_step_grad"],
-        frac_max_steps=CONFIG["frac_max_steps"],
+        encoding=config.get("model.encoding", "global"),
+        max_cycle=config.get("scf.max_cycle", 15),
+        use_diis=config.get("scf.use_diis", True),
+        diis_max_vec=config.get("scf.diis_max_vec", 15),
+        diis_min_vec=config.get("scf.diis_min_vec", 2),
+        diis_start_cycle=config.get("scf.diis_start_cycle", 1),
+        diis_damping=config.get("scf.diis_damping", 0.0),
+        frac_enabled=config.get("scf.frac_enabled", 1),
+        frac_theta=config.get("scf.frac_theta", 0.04),
+        frac_mu=config.get("scf.frac_mu", None),
+        frac_mu_shift=config.get("scf.frac_mu_shift", 0.001),
+        frac_step_grad=config.get("scf.frac_step_grad", 0.6),
+        frac_max_steps=config.get("scf.frac_max_steps", 100),
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
+    config = Config(config_path=str(CONFIG_PATH))
 
-    is_descriptor = CONFIG["model"] == "descriptor"
-    is_qcnn = CONFIG["model"] == "qcnn"
-    if is_descriptor and CONFIG["encoding"] != "global":
-        raise ValueError("DescriptorXC requires encoding='global'.")
-    if is_qcnn and CONFIG["encoding"] != "global":
-        raise ValueError("QCNN requires encoding='global'.")
+    jax.config.update("jax_enable_x64", True)
+    jax.config.update("jax_platform_name", config.get("platform", "cpu"))
 
-    if is_qcnn:
-        gate_noise = None
-        if CONFIG["qcnn_gate_noise"]:
-            from horqrux.noise import DigitalNoiseInstance, DigitalNoiseType
-            gate_noise = tuple(
-                DigitalNoiseInstance(DigitalNoiseType[kind.upper()], prob)
-                for kind, prob in CONFIG["qcnn_gate_noise"]
-            )
-        network = QCNN(
-            n_qubits=CONFIG["qcnn_n_qubits"],
-            n_features=CONFIG["qcnn_n_features"],
-            n_layers=CONFIG["qcnn_n_layers"],
-            n_var_layers=CONFIG["qcnn_n_var_layers"],
-            feature_map=CONFIG["qcnn_feature_map"],
-            head_features=CONFIG["qcnn_head_features"],
-            noise=gate_noise,
-            gaussian_noise_std=CONFIG["qcnn_gaussian_noise_std"],
-        )
-        xc_eval_fn = make_eval_xc_global(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
-        params = network.init(random.PRNGKey(CONFIG["rng"]), jnp.ones(CONFIG["n_grid"]))
-    elif is_descriptor:
-        network = DescriptorXC(
-            hidden=CONFIG["hidden_layers"],
-            alphas=CONFIG["descriptor_alphas"],
-            scale=CONFIG["descriptor_scale"],
-            rho_floor=CONFIG["descriptor_rho_floor"],
-            act_fn=nn.gelu,
-        )
-        xc_eval_fn = make_eval_xc_global(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
-        params = network.init(
-            random.PRNGKey(CONFIG["rng"]),
-            jnp.ones(CONFIG["n_grid"]),
-            jnp.zeros((CONFIG["n_grid"], 3)),
-            jnp.ones(CONFIG["n_grid"]) / CONFIG["n_grid"],
-            jnp.zeros((CONFIG["n_atom"], 3)),
-        )
-    elif CONFIG["encoding"] == "local":
-        network = LocalMLP(features=CONFIG["hidden_layers"], act_fn=nn.gelu)
-        xc_eval_fn = make_eval_xc_local(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
-        params = network.init(random.PRNGKey(CONFIG["rng"]), jnp.ones(CONFIG["n_grid"]))
-    elif CONFIG["encoding"] == "global":
-        network = GlobalMLP(features=CONFIG["hidden_layers"], act_fn=nn.gelu)
-        xc_eval_fn = make_eval_xc_global(network, vxc_grad_scale=CONFIG["vxc_grad_scale"])
-        params = network.init(random.PRNGKey(CONFIG["rng"]), jnp.ones(CONFIG["n_grid"]))
-    else:
-        raise ValueError(f"Unknown encoding: {CONFIG['encoding']!r}")
+    output_dir = config.get("output_dir", "results/h2_dissociation")
 
-    ccsd_bond_lengths = [0.5, 0.74, 1.0, 1.5, 2.0, 2.5, 3.0]
-    print(f"Generating {len(ccsd_bond_lengths)} CCSD configurations...")
-    molecule_configs = [
-        _h2_molecule_config(
-            d,
-            method="ccsd",
-            basis=CONFIG["basis"],
-            units=CONFIG["units"],
-            grid_density=CONFIG["grid_density"],
-        )
-        for d in ccsd_bond_lengths
-    ]
+    # 1. Build the XC network from the config (descriptor / mlp / qcnn). This is
+    #    the same library helper the CLI uses, so behaviour stays identical.
+    #    (`_network` itself isn't needed downstream -- training uses xc_eval_fn
+    #    and the init params; `is_descriptor` flags whether the SCF loop needs
+    #    grid/atom-coordinate context.)
+    _network, xc_eval_fn, params, is_descriptor = build_network(config)
 
-    data_generator = DataGenerator(CONFIG["output_dir"])
+    # 2. Reference data for the whole train/val/test split, as ONE self-
+    #    describing HDF5 file (auto-cached: generated once, reloaded on reruns).
+    #    Geometries come from data.{train,val,test}_bond_lengths. No per-geometry
+    #    folders or scattered .npy -- everything lives in output_dir/dataset.h5.
+    data_generator = DataGenerator(output_dir)
+    molecule_factory = h2_molecule_config_factory(config)
+    dataset = dataset_for_config(
+        config,
+        molecule_config_factory=molecule_factory,
+        is_descriptor=is_descriptor,
+    )
+    training_data = dataset.training_tuples("train")
+    val_data = dataset.training_tuples("val")
+    test_configs = [dp.meta for dp in dataset.test]
+    print(
+        f"Data split -> train: {len(training_data)} | "
+        f"val: {len(val_data)} | test: {len(test_configs)}"
+    )
 
-    training_data = []
-    for cfg in molecule_configs:
-        mol, mf, dm, energy, density, coords = data_generator.generate_data(cfg)
-        eri = mol.intor("int2e", aosym="s1")
-        ao_grid = get_ao_value(mol, mf.grids.coords)
-        precomputed = [
-            eri,
-            ao_grid,
-            mf.grids.weights,
-            mf.get_ovlp(mol),
-            mf.get_hcore(mol),
-            mol.energy_nuc(),
-            mol.nelectron,
-        ]
-        if is_descriptor:
-            precomputed.append(jnp.asarray(mf.grids.coords))
-            precomputed.append(jnp.asarray(mol.atom_coords()))
-        training_data.append((energy, jnp.c_[coords, density], tuple(precomputed), dm))
+    # 3. Optimizer: Adam with optional global-norm gradient clipping.
+    optimizer = optax.adam(config.get("training.learning_rate", 1e-4))
+    grad_clip = config.get("training.grad_clip", 0.5)
+    if grad_clip is not None:
+        optimizer = optax.chain(optax.clip_by_global_norm(grad_clip), optimizer)
 
-    optimizer = optax.adam(CONFIG["learning_rate"])
-    if CONFIG["grad_clip"] is not None:
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(CONFIG["grad_clip"]),
-            optimizer,
-        )
-
-    # `rks_loss_scan` uses lax.scan over SCF cycles (no DIIS) so compile time
-    # is roughly independent of `max_cycle` — for QCNN training that's the
-    # difference between ~3s and several minutes per jit. We strip DIIS-specific
-    # kwargs since the scan variant doesn't take them.
-    scf_kwargs = _scf_kwargs()
-    for k in ("diis_max_vec", "diis_min_vec", "diis_start_cycle", "diis_damping"):
-        scf_kwargs.pop(k, None)
-
-    trained_params = train(
+    # 4. Train. `rks_loss_scan` uses lax.scan over SCF cycles, so compile time is
+    #    ~independent of max_cycle; it does not take the DIIS-only kwargs.
+    #    Validation runs every n_val_iter steps (separate jitted closure -> no
+    #    per-step slowdown); the lowest-val-loss params are returned as `best`.
+    scf_kwargs = _scf_kwargs(config)
+    train_scf_kwargs = {k: v for k, v in scf_kwargs.items() if k not in _DIIS_ONLY_KEYS}
+    trained_params, history = train(
         params,
         training_data,
         optimizer,
         scf_loss_fn=rks_loss_scan,
         xc_eval_fn=xc_eval_fn,
-        n_iterations=CONFIG["n_iterations"],
-        energy_weight=CONFIG["energy_weight"],
-        density_weight=CONFIG["density_weight"],
-        **scf_kwargs,
+        n_iterations=config.get("training.n_iterations", 1000),
+        log_every=config.get("training.log_every", 5),
+        val_data=val_data or None,
+        n_val_iter=config.get("training.n_val_iter", 50),
+        patience=config.get("training.patience", None),
+        return_history=True,
+        energy_weight=config.get("training.energy_weight", 1.0),
+        density_weight=config.get("training.density_weight", 1.0),
+        **train_scf_kwargs,
     )
 
-    print("\n" + "-" * 70)
-    print("Calculating H2 dissociation profile")
-    print("-" * 70)
+    # 5a. General evaluation on the held-out TEST set: parity plot (reference vs
+    #     predicted, y=x, ±1.6 mHa band) + MAE/NPE. Geometry-agnostic.
+    test_predicted, test_reference, test_metrics = evaluate_samples(
+        trained_params,
+        data_generator,
+        test_configs,
+        scf_energy_fn=rks_energy,
+        xc_eval_fn=xc_eval_fn,
+        pass_descriptor_ctx=is_descriptor,
+        label="test set",
+        **scf_kwargs,
+    )
+    parity_plot(
+        test_reference,
+        test_predicted,
+        title=f"Test set: predicted vs {config.get('data.method', 'ccsd')} reference",
+        path_results=output_dir,
+    )
 
-    bond_lengths = np.linspace(0.5, 3.0, 30)
+    # 5b. Dissociation profile (curve-specific): energy vs bond length.
+    eval_bond_lengths = np.linspace(
+        config.get("data.eval_min", 0.5),
+        config.get("data.eval_max", 3.0),
+        config.get("data.eval_points", 30),
+    )
     bond_lengths, ml_energies, ref_energies = calculate_dissociation_profile(
         params=trained_params,
         data_generator=data_generator,
-        molecule_config_factory=_h2_molecule_config,
+        molecule_config_factory=molecule_factory,
         scf_energy_fn=rks_energy,
         xc_eval_fn=xc_eval_fn,
-        bond_lengths=bond_lengths,
-        method=CONFIG["method"],
-        basis=CONFIG["basis"],
-        units=CONFIG["units"],
-        grid_density=CONFIG["grid_density"],
-        path_results=CONFIG["output_dir"],
+        bond_lengths=eval_bond_lengths,
+        method=config.get("data.method", "ccsd"),
+        basis=config.get("data.basis", "631g"),
+        units=config.get("data.units", "Ang"),
+        grid_density=config.get("data.grid_density", 0),
+        path_results=output_dir,
         pass_descriptor_ctx=is_descriptor,
-        **_scf_kwargs(),
+        **scf_kwargs,
     )
-
     plot_dissociation_profile(
         bond_lengths=bond_lengths,
         ml_energies=ml_energies,
         ref_energies=ref_energies,
-        method=CONFIG["method"],
-        exp_model=CONFIG["exp_model"],
-        path_results=CONFIG["output_dir"],
+        method=config.get("data.method", "ccsd"),
+        exp_model=config.get("model.exp_model", "density"),
+        path_results=output_dir,
     )
 
     print("\n" + "-" * 70)
     print("Training and evaluation complete!")
+    if history.best_iter is not None:
+        print(f"  Best val loss: {history.best_val_loss:.6f} @ iter {history.best_iter}")
+    print(f"  Test MAE: {test_metrics['mae']:.3e} Ha   NPE: {test_metrics['npe']:.3e} Ha")
+    print(f"  Results written to: {output_dir}")
     print("-" * 70)
+
+
+if __name__ == "__main__":
+    main()

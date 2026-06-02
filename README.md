@@ -70,11 +70,95 @@ For GPU acceleration, install instead the version of JAX with GPU support, e.g.:
 pip install -U "jax[cuda12]"
 ```
 
-## Usage Examples
+## Quickstart (current API)
 
-Below are examples of how to run the training scripts for 1D and 3D systems. To reproduce the results from the paper, please refer to the `notebooks` folder. There one needs to increase the number of epochs and change the number neurons / qubits and layers as in our paper. The default settings are just for demonstration purposes.
+The current 3D code path is fully self-contained: a run is described by a single
+YAML config and driven end to end by `qex.run_experiment` (build network →
+generate reference data → train → evaluate → plot). No code editing required.
 
-### Training XC Model in the 1D Kohn-Sham DFT Framework
+### Train from the command line
+
+Installing the package exposes a `qex` console script with subcommands (also
+runnable as `python -m qex`):
+
+```bash
+# Train a descriptor-MLP XC functional on H2 against CCSD references
+qex train --config examples/h2.yaml
+
+# Override any config leaf by its dot-path
+qex train --config examples/h2.yaml --training.learning_rate 5e-4 --platform gpu
+
+# `qex` with no subcommand lists the available commands
+qex
+```
+
+For convenience, a bare `qex --config ...` (no subcommand) defaults to `train`.
+
+The config ([`examples/h2.yaml`](examples/h2.yaml)) selects the model
+(`descriptor`, `mlp`, or `qcnn`), the encoding (`global`/`local`), the reference
+data (method, basis, bond lengths), and the SCF / training hyperparameters.
+Results (energies as `.npy` and a dissociation-profile plot) are written to
+`output_dir`.
+
+### Train from Python
+
+The same driver is a one-liner from Python — useful for notebooks, sweeps, or
+wrapping in a hyperparameter search:
+
+```python
+from qex import Config, run_experiment
+
+config = Config(config_path="examples/h2.yaml")
+config.set("training.n_iterations", 2000)        # tweak any setting in code
+
+result = run_experiment(config)
+print(result.mae, result.npe)                    # profile error metrics
+trained_params = result.params
+```
+
+### Build the pieces yourself
+
+`run_experiment` is convenient but opaque. When you want to *see* and change how
+the pipeline fits together — custom data, a different loss, extra logging — read
+[`examples/train_h2.py`](examples/train_h2.py). It is an explicit, top-to-bottom
+recipe that calls the same public library functions the CLI uses (so there is no
+duplicated plumbing), spelled out in five clear steps: build network → generate
+data → optimizer → train → evaluate + plot.
+
+The building blocks are all re-exported from the top-level package, so you can
+assemble a custom loop without reaching into submodules:
+
+```python
+import jax.numpy as jnp
+from jax import random
+from flax import linen as nn
+
+from qex import GlobalMLP, make_eval_xc_global, train, rks_loss_scan
+
+network = GlobalMLP(features=[128, 128, 128], act_fn=nn.gelu)
+params = network.init(random.PRNGKey(0), jnp.ones(1240))
+xc_eval_fn = make_eval_xc_global(network)
+
+# `train(params, training_data, optimizer, scf_loss_fn=rks_loss_scan,
+#        xc_eval_fn=xc_eval_fn, n_iterations=...)` runs the vmap-batched SCF loop.
+# `qex.training.build_network(config)` / `assemble_training_data(...)` are the
+# higher-level helpers the example and CLI share.
+```
+
+See `qex.scf`, `qex.functionals`, `qex.training`, `qex.data_io`, and
+`qex.config` for the full per-subpackage API.
+
+## Usage Examples (legacy 1D / 3D reproduction)
+
+The examples below use the **legacy** modules (`qex.legacy.*`, which depend on
+`jax_dft`) and reproduce the exact 1D and 3D setups from the
+[paper](https://arxiv.org/abs/2404.14258). New work should prefer the current
+API above; these remain for reproducibility. To reproduce the published results,
+please refer to the `notebooks` folder — there one needs to increase the number
+of epochs and change the number of neurons / qubits and layers as in our paper.
+The default settings are just for demonstration purposes.
+
+### Training XC Model in the 1D Kohn-Sham DFT Framework (legacy)
 
 This command runs the example training script for a 1D quantum system.
 The user can define their own network by inheriting from the `KohnShamNetwork`, basically by implementing the `build_network` method for their specific `network` that returns `(init_fn, apply_fn)`.
@@ -115,9 +199,9 @@ params, loss, info = trainer.train(
 ```
 *(Note: See also `qex/train/od/train.py` for the 1D training script)*
 
-### Training XC Model in the 3D Kohn-Sham DFT Framework
+### Training XC Model in the 3D Kohn-Sham DFT Framework (legacy)
 
-Similarly, this command runs the example training script for KS-DFT in 3D, for the H2 molecule:
+Similarly, this command runs the *legacy* example training script for KS-DFT in 3D, for the H2 molecule. For new 3D work, prefer the [Quickstart](#quickstart-current-api) above:
 
 ```python
 import os
