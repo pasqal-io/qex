@@ -64,6 +64,11 @@ from qex.utils.logging import configure_logging
 # stripped before training (which uses `rks_loss_scan`) and kept for evaluation.
 _DIIS_ONLY_KEYS = ("diis_max_vec", "diis_min_vec", "diis_start_cycle", "diis_damping")
 
+# SCF kwargs the training loss understands but the eval energy fn does not.
+# `differentiation` only selects how gradients flow through the SCF fixed point,
+# which is meaningless for the forward-only `rks_energy`; strip it for eval.
+_TRAIN_ONLY_KEYS = ("differentiation",)
+
 
 @dataclass
 class ExperimentResult:
@@ -124,6 +129,10 @@ def _scf_kwargs(config: Config) -> dict[str, Any]:
         # aufbau only, needs scf.frac_enabled=0). Threaded through both the scan
         # training loop and the DIIS eval loop.
         solver=config.get("scf.solver", "dense"),
+        # SCF gradient mode for training: "unroll" (backprop through every cycle)
+        # or "implicit" (implicit-function-theorem on the fixed point; cost
+        # independent of max_cycle). Eval (`rks_energy`) ignores it.
+        differentiation=config.get("scf.differentiation", "unroll"),
     )
 
 
@@ -584,6 +593,8 @@ def run_experiment(
     # roughly independent of `max_cycle`. Strip DIIS-only kwargs it can't take.
     scf_kwargs = _scf_kwargs(config)
     train_scf_kwargs = {k: v for k, v in scf_kwargs.items() if k not in _DIIS_ONLY_KEYS}
+    # Eval uses the forward-only `rks_energy`, which has no `differentiation` arg.
+    eval_scf_kwargs = {k: v for k, v in scf_kwargs.items() if k not in _TRAIN_ONLY_KEYS}
 
     # --- Train with periodic validation + optional early stopping -------------
     logger.info(
@@ -619,7 +630,7 @@ def run_experiment(
             xc_eval_fn=xc_eval_fn,
             required_features=required_features,
             label="test set",
-            **scf_kwargs,
+            **eval_scf_kwargs,
         )
     else:
         test_predicted, test_reference, test_metrics = evaluate_samples(
@@ -630,7 +641,7 @@ def run_experiment(
             xc_eval_fn=xc_eval_fn,
             required_features=required_features,
             label="test set",
-            **scf_kwargs,
+            **eval_scf_kwargs,
         )
     logger.info(
         "Test set -> MAE {:.3e} Ha | NPE {:.3e} Ha",
@@ -684,7 +695,7 @@ def run_experiment(
             verbose=config.get("data.verbose", 0),
             path_results=output_dir,
             required_features=required_features,
-            **scf_kwargs,
+            **eval_scf_kwargs,
         )
         if make_plot:
             logger.info("Making dissociation profile plot -> {}", output_dir)

@@ -58,8 +58,12 @@ training:
 # SCF / KS-solve settings. `run_experiment` reads these from `scf.*` (see
 # qex.training.experiment._scf_kwargs). `dense` is exact and the only fully
 # supported solver under the training vmap; see examples/h2.yaml for the
-# solver/fractional-occupation trade-offs.
+# solver/fractional-occupation trade-offs and the `differentiation` switch.
 scf:
+  # Training SCF gradient mode: "unroll" (backprop through every cycle) or
+  # "implicit" (implicit-function-theorem on the fixed point; cost independent of
+  # max_cycle). See examples/h2.yaml for the full trade-offs. Eval ignores it.
+  differentiation: unroll
   solver: dense
   max_cycle: 15
   use_diis: true

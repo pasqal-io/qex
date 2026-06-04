@@ -44,6 +44,8 @@ CONFIG_PATH = Path(__file__).with_name("h2.yaml")
 # SCF kwargs the scan loop (`rks_loss_scan`) does not accept; stripped at train
 # time and kept for the DIIS-based evaluation loop (`rks_energy`).
 _DIIS_ONLY_KEYS = ("diis_max_vec", "diis_min_vec", "diis_start_cycle", "diis_damping")
+# Train-only kwargs the eval energy fn (`rks_energy`) does not accept.
+_TRAIN_ONLY_KEYS = ("differentiation",)
 
 
 def _scf_kwargs(config: Config) -> dict:
@@ -67,6 +69,10 @@ def _scf_kwargs(config: Config) -> dict:
         # purification; integer aufbau only, i.e. needs scf.frac_enabled=0).
         # Accepted by both rks_loss_scan (train) and rks_energy (eval).
         solver=config.get("scf.solver", "dense"),
+        # SCF gradient mode for training: "unroll" (backprop through every cycle)
+        # or "implicit" (implicit-function-theorem on the fixed point; cost
+        # independent of max_cycle). Eval (`rks_energy`) ignores it.
+        differentiation=config.get("scf.differentiation", "unroll"),
     )
 
 
@@ -87,10 +93,12 @@ def main() -> None:
 
     # 1. Build the XC network from the config (descriptor / mlp / qcnn). This is
     #    the same library helper the CLI uses, so behaviour stays identical.
-    #    (`_network` itself isn't needed downstream -- training uses xc_eval_fn
-    #    and the init params; `is_descriptor` flags whether the SCF loop needs
-    #    grid/atom-coordinate context.)
-    _network, xc_eval_fn, params, is_descriptor = build_network(config)
+    #    `network.required_features` declares which named features (e.g.
+    #    grid_coords / atom_coords for the descriptor) the model consumes; the
+    #    dataset narrows each sample's feature bag to exactly those. A plain
+    #    density model declares `()` and gets an empty bag.
+    network, xc_eval_fn, params, is_descriptor = build_network(config)
+    required_features = tuple(getattr(network, "required_features", ()))
 
     # 2. Reference data for the whole train/val/test split, as ONE self-
     #    describing HDF5 file (auto-cached: generated once, reloaded on reruns).
@@ -103,8 +111,11 @@ def main() -> None:
         molecule_config_factory=molecule_factory,
         is_descriptor=is_descriptor,
     )
-    training_data = dataset.training_tuples("train")
-    val_data = dataset.training_tuples("val")
+    # Pass `required_features` so the per-sample feature bag carries the arrays the
+    # network needs (e.g. the descriptor's grid_coords/atom_coords). Omitting it
+    # yields an empty bag and the descriptor raises "missing grid_coords".
+    training_data = dataset.training_tuples("train", required_features)
+    val_data = dataset.training_tuples("val", required_features)
     test_configs = [dp.meta for dp in dataset.test]
     logger.info(
         "Data split -> train: {} | val: {} | test: {}",
@@ -125,6 +136,8 @@ def main() -> None:
     #    per-step slowdown); the lowest-val-loss params are returned as `best`.
     scf_kwargs = _scf_kwargs(config)
     train_scf_kwargs = {k: v for k, v in scf_kwargs.items() if k not in _DIIS_ONLY_KEYS}
+    # Eval uses the forward-only `rks_energy`, which has no `differentiation` arg.
+    eval_scf_kwargs = {k: v for k, v in scf_kwargs.items() if k not in _TRAIN_ONLY_KEYS}
     trained_params, history = train(
         params,
         training_data,
@@ -150,9 +163,9 @@ def main() -> None:
         test_configs,
         scf_energy_fn=rks_energy,
         xc_eval_fn=xc_eval_fn,
-        pass_descriptor_ctx=is_descriptor,
+        required_features=required_features,
         label="test set",
-        **scf_kwargs,
+        **eval_scf_kwargs,
     )
     parity_plot(
         test_reference,
@@ -180,8 +193,8 @@ def main() -> None:
         grid_density=config.get("data.grid_density", 0),
         verbose=config.get("data.verbose", 0),
         path_results=output_dir,
-        pass_descriptor_ctx=is_descriptor,
-        **scf_kwargs,
+        required_features=required_features,
+        **eval_scf_kwargs,
     )
     plot_dissociation_profile(
         bond_lengths=bond_lengths,

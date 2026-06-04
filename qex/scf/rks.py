@@ -21,6 +21,21 @@ Which loss to use
   Use this for QCNN training; revisit once DIIS is ported to fixed buffers
   (then `rks_loss_scan` can take an optional `use_diis` flag, mirroring
   how `frac_enabled` is already toggleable).
+
+Differentiation mode
+--------------------
+`rks_loss_scan` exposes a `differentiation` switch:
+
+- `"unroll"` (default): backprop straight through every SCF cycle. The reverse
+  graph grows linearly with `max_cycle` — fine for cheap XC, costly for the
+  QCNN.
+- `"implicit"`: differentiate the SCF *fixed point* via the implicit function
+  theorem (`qex.scf.implicit_diff`). The forward solve runs without an autodiff
+  graph and the gradient comes from one linear solve, so cost is independent of
+  the cycle count — faster to compile and scale. Trade-offs: it assumes the SCF
+  reaches a fixed point, so the energy loss is taken on the converged density
+  only (not summed across cycles, so `ignore_ks_iter` is unused), and DIIS only
+  accelerates the forward solve (the fixed point itself is DIIS-free).
 """
 
 from collections.abc import Callable
@@ -31,9 +46,13 @@ import jax.numpy as jnp
 from chex import Array
 from loguru import logger
 
-from qex.linalg.generalized_eigensolver import generalized_eigh
+# from qex.linalg.generalized_eigensolver import generalized_eigh
+from eigh import eigh_gen as generalized_eigh
+
+
 from qex.linalg.ks_solvers import lobpcg_solve, mcweeny_purify
 from qex.scf.fermi import get_fractional_occupations_jax
+from qex.scf.implicit_diff import custom_fixed_point
 from qex.scf.jax_diis import apply_diis, initialize_diis
 from qex.scf.jax_diis_scan import (
     apply_diis_scan,
@@ -299,6 +318,7 @@ def rks_loss(
         "diis_start_cycle",
         "diis_damping",
         "solver",
+        "differentiation",
     ),
 )
 def rks_loss_scan(
@@ -334,6 +354,7 @@ def rks_loss_scan(
     diis_start_cycle: int = 1,
     diis_damping: float = 0.0,
     solver: str = "dense",
+    differentiation: str = "unroll",
 ) -> Array:
     """Scan-based SCF loss — same loss as `rks_loss`, DIIS optional.
 
@@ -365,6 +386,22 @@ def rks_loss_scan(
         frac_step_grad=frac_step_grad,
         frac_max_steps=frac_max_steps,
     )
+
+    if differentiation not in ("unroll", "implicit"):
+        raise ValueError(
+            f"Unknown differentiation mode {differentiation!r} "
+            "(expected 'unroll' or 'implicit')."
+        )
+
+    if differentiation == "implicit":
+        return _rks_loss_implicit(
+            params, dm, eri, ao_grid, grid_weights, s1e, h1e, energy_nuc,
+            nelectron, exact_energy, exact_density,
+            features=features, xc_eval_fn=xc_eval_fn, encoding=encoding,
+            max_cycle=max_cycle, energy_weight=energy_weight,
+            density_weight=density_weight, frac_enabled=frac_enabled,
+            frac_kwargs=frac_kwargs, solver=solver,
+        )
 
     fock_size = h1e.size
     if use_diis:
@@ -426,6 +463,104 @@ def rks_loss_scan(
     rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm_final, ao_grid)
     rho_loss = jnp.mean((rho - exact_density) ** 2)
     return energy_weight * loss + density_weight * rho_loss
+
+
+def _rks_loss_implicit(
+    params: dict,
+    dm: Array,
+    eri: Array,
+    ao_grid: Array,
+    grid_weights: Array,
+    s1e: Array,
+    h1e: Array,
+    energy_nuc: float,
+    nelectron: int,
+    exact_energy: float,
+    exact_density: Array,
+    *,
+    features: dict | None,
+    xc_eval_fn: Callable,
+    encoding: str,
+    max_cycle: int,
+    energy_weight: float,
+    density_weight: float,
+    frac_enabled: int,
+    frac_kwargs: dict,
+    solver: str,
+) -> Array:
+    """Implicit-differentiation SCF loss (see `rks_loss_scan` docstring).
+
+    The SCF fixed point on the density matrix is solved without an autodiff
+    graph (`qex.scf.implicit_diff.custom_fixed_point`); the gradient of the
+    converged `dm*` w.r.t. the differentiable inputs comes from one linear solve
+    via the implicit function theorem, so the cost does not grow with
+    `max_cycle`. DIIS is intentionally absent from the fixed-point map — it would
+    only accelerate the forward solve and does not change the fixed point.
+
+    Because only the converged density is differentiated (the iterates carry no
+    graph), the energy term is the squared error at `dm*` rather than a
+    discounted sum over cycles; `ignore_ks_iter` therefore has no effect here.
+    """
+
+    # The SCF step `T(dm, theta)`: build the Fock matrix and solve for the next
+    # density. This is exactly one cycle of the scan loop's body (sans DIIS, which
+    # only accelerates the forward solve and does not change the fixed point), so
+    # the implicit path deviates from the unrolled loop only in HOW it is
+    # differentiated, not in the SCF math.
+    #
+    # Everything the step reads from the trace rides *inside* `theta` rather than
+    # being closed over. The reason: the implicit VJP differentiates the step a
+    # second time inside a jitted backward rule, and any traced array/int captured
+    # as a closure constant is rejected there ("not a valid JAX type") — including
+    # `nelectron` and the descriptor `features` bag (e.g. grid_coords [n_grid, 3]).
+    # Threaded through `theta` they become proper arguments of that trace instead.
+    # `nelectron` is a discrete electron count (only sets `n_occ`), never
+    # differentiated, so we `stop_gradient` it inside the step; it stays traced, so
+    # the loop remains vmap-batchable over a batch of differing electron counts.
+    # `features` is the named model-feature bag (empty for a plain MLP), forwarded
+    # to `get_veff` exactly as the scan loop does.
+    theta = (params, eri, h1e, s1e, ao_grid, grid_weights, nelectron, features)
+
+    def step_fn(dm_c: Array, theta) -> Array:
+        (params_t, eri_t, h1e_t, s1e_t, ao_grid_t, grid_weights_t,
+         nelectron_t, features_t) = theta
+        vhf, _exc, _J = get_veff(
+            dm_c, eri_t, ao_grid_t, grid_weights_t, params_t, xc_eval_fn,
+            encoding=encoding, features=features_t,
+        )
+        fock = h1e_t + vhf
+        dm_new, _energy_entr = _solve_density(
+            fock, s1e_t, jax.lax.stop_gradient(nelectron_t),
+            frac_enabled, solver, frac_kwargs,
+        )
+        return dm_new
+
+    solver_fp = custom_fixed_point(step_fn, max_cycle=max_cycle)
+    dm_final = solver_fp(dm, theta)
+
+    # `nelectron` is discrete; detach it before the post-solve energy assembly too
+    # (same reason as inside the step).
+    nelectron = jax.lax.stop_gradient(nelectron)
+
+    # Energy at the converged fixed point — same assembly as the scan loop's last
+    # cycle: rebuild veff from dm*, re-solve to recover the entropy term, total
+    # energy from dm*. The implicit VJP flows through this since `dm_final` carries
+    # the fixed-point gradient.
+    vhf, exc_energy, J = get_veff(
+        dm_final, eri, ao_grid, grid_weights, params, xc_eval_fn,
+        encoding=encoding, features=features,
+    )
+    fock = h1e + vhf
+    _dm_star, energy_entr = _solve_density(
+        fock, s1e, nelectron, frac_enabled, solver, frac_kwargs,
+    )
+    e_tot = energy_tot(dm_final, h1e, J, exc_energy, energy_nuc) + energy_entr
+
+    energy_loss = (e_tot - exact_energy) ** 2
+
+    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm_final, ao_grid)
+    rho_loss = jnp.mean((rho - exact_density) ** 2)
+    return energy_weight * energy_loss + density_weight * rho_loss
 
 
 def rks_energy(
