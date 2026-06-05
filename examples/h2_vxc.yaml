@@ -1,0 +1,90 @@
+# Train an XC functional on H2 and regress against the reference XC potential
+# (Vxc) and density matrix (dm) on top of energy + density.
+#
+# Run it with:
+#     qex train --config examples/h2_vxc.yaml
+#
+# Requires a Kohn-Sham reference (data.method: rks) -- a KS Vxc is only defined
+# for a DFT reference. With method: ccsd/fci there is no Vxc by construction, so
+# turning on target_weights.vxc would raise a clear error (set it to 0, or use a
+# dataset built with method: rks; data.recompute_missing_targets can recompute a
+# missing vxc for an existing RKS dataset).
+
+rng: 42
+platform: cpu
+output_dir: results/h2_vxc
+logging:
+  level: INFO
+
+model:
+  type: descriptor
+  encoding: global
+  exp_model: density
+  n_grid: 1240
+  n_atom: 2
+  vxc_grad_scale: 1.0
+  hidden_layers: [128, 128, 128, 128, 128]
+  descriptor:
+    alphas: [0.5, 1.0, 2.0, 4.0]
+    scale: 1.0
+    rho_floor: 1.0e-10
+
+data:
+  # A Kohn-Sham reference, so each system carries a reference Vxc target.
+  method: rks
+  xc: b3lyp                            # reference functional for the RKS solver
+  basis: 631g
+  units: Ang
+  grid_density: 0
+  verbose: 0
+  dataset_file: null
+  cache_dataset: true
+  train_bond_lengths: [0.5, 0.74, 1.0, 1.5, 2.0, 2.5, 3.0]
+  val_bond_lengths:   [0.6, 0.9, 1.2]
+  test_bond_lengths:  [0.8, 1.3, 1.75, 2.25, 2.75]
+  eval_dissociation: true
+  eval_min: 0.5
+  eval_max: 3.01
+  eval_points: 30
+  # If you point dataset_file at an RKS .h5 generated before Vxc existed, set this
+  # to recompute the missing vxc target via PySCF instead of erroring out:
+  # recompute_missing_targets: true
+
+training:
+  learning_rate: 1.0e-4
+  n_iterations: 1000
+  log_every: 5
+  # `energy` is the one always-on loss term and keeps its own weight.
+  energy_weight: 1.0
+  # Every other loss is a weighted reference target in this one map: a non-zero
+  # weight switches it ON, 0 (or omitting the key) switches it OFF — no code to
+  # comment out. Weights are scalar so you can tune relative magnitude
+  # (energy/density/vxc/dm live on very different scales). Defaults: density on
+  # (1.0), vxc/dm off (0.0). All non-energy targets are scored at the converged
+  # density. `vxc` needs an RKS reference (see above); `dm` works for any.
+  target_weights:
+    density: 1.0
+    vxc: 0.0
+    dm: 0.0
+  grad_clip: 0.5
+  n_val_iter: 50
+  patience: 5
+
+scf:
+  # "unroll" (backprop every cycle) or "implicit" (implicit-function-theorem on
+  # the fixed point; cost independent of max_cycle). Both score vxc/dm at the
+  # converged state.
+  differentiation: unroll
+  solver: dense
+  max_cycle: 15
+  use_diis: true
+  diis_max_vec: 15
+  diis_min_vec: 2
+  diis_start_cycle: 1
+  diis_damping: 0.0
+  frac_enabled: 0
+  frac_theta: 0.04
+  frac_mu: null
+  frac_mu_shift: 0.001
+  frac_step_grad: 0.6
+  frac_max_steps: 100

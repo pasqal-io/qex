@@ -33,12 +33,15 @@ def get_veff_local(
 
     Returns (Vhf = J + Vxc, exc_energy, J).
     """
-    J = jnp.einsum("ijkl,kl->ij", eri, dm)
-    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
+    # `optimize=True` lets opt_einsum/XLA pick the contraction order. It is
+    # numerically identical to the naive order (verified in tests) and never
+    # slower, so it is on for every contraction in this module.
+    J = jnp.einsum("ijkl,kl->ij", eri, dm, optimize=True)
+    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid, optimize=True)
     exc, (vrho, _, _, _), _, _ = xc_eval_fn(
         "", rho, params=params, grid_weights=grid_weights,
     )
-    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid)
+    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid, optimize=True)
     return J + Vxc, jnp.sum(exc * rho * grid_weights), J
 
 
@@ -65,15 +68,17 @@ def get_veff_global(
 
     Returns (Vhf = J + Vxc, exc_energy, J).
     """
-    J = jnp.einsum("ijkl,kl->ij", eri, dm)
-    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
+    # See `get_veff_local`: `optimize=True` is numerically identical and never
+    # slower; on for every contraction here.
+    J = jnp.einsum("ijkl,kl->ij", eri, dm, optimize=True)
+    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid, optimize=True)
     exc, (vrho, _, _, _), _, _ = xc_eval_fn(
         "", rho,
         params=params,
         grid_weights=grid_weights,
         features=features,
     )
-    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid)
+    Vxc = jnp.einsum("gi,g,gj->ij", ao_grid, grid_weights * vrho, ao_grid, optimize=True)
     return J + Vxc, exc, J
 
 
@@ -115,8 +120,8 @@ def get_veff(
 
 def energy_tot(dm: Array, h1e: Array, J: Array, exc_energy: Array, energy_nuc: float) -> Array:
     """KS total energy: one-electron + Hartree + XC + nuclear."""
-    e_one = jnp.einsum("ij,ji->", dm, h1e)
-    e_hartree = 0.5 * jnp.einsum("ij,ij->", dm, J)
+    e_one = jnp.einsum("ij,ji->", dm, h1e, optimize=True)
+    e_hartree = 0.5 * jnp.einsum("ij,ij->", dm, J, optimize=True)
     return e_one + e_hartree + exc_energy + energy_nuc
 
 
