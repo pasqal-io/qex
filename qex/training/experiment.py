@@ -39,6 +39,7 @@ from qex.data_io import (
     build_dataset,
     load_dataset,
     read_config_hash,
+    reference_vxc,
 )
 from qex.functionals import (
     DescriptorXC,
@@ -50,6 +51,7 @@ from qex.functionals import (
     select,
 )
 from qex.scf import get_ao_value, rks_energy, rks_loss_scan
+from qex.scf.inputs import SCFInputs
 from qex.training.evaluate import (
     calculate_dissociation_profile,
     evaluate_dataset_split,
@@ -67,7 +69,7 @@ _DIIS_ONLY_KEYS = ("diis_max_vec", "diis_min_vec", "diis_start_cycle", "diis_dam
 # SCF kwargs the training loss understands but the eval energy fn does not.
 # `differentiation` only selects how gradients flow through the SCF fixed point,
 # which is meaningless for the forward-only `rks_energy`; strip it for eval.
-_TRAIN_ONLY_KEYS = ("differentiation",)
+_TRAIN_ONLY_KEYS = ("differentiation", "target_weights")
 
 
 @dataclass
@@ -133,7 +135,119 @@ def _scf_kwargs(config: Config) -> dict[str, Any]:
         # or "implicit" (implicit-function-theorem on the fixed point; cost
         # independent of max_cycle). Eval (`rks_energy`) ignores it.
         differentiation=config.get("scf.differentiation", "unroll"),
+        # Per-target loss weights for the extra reference targets scored at the
+        # converged state (vxc, dm, ...). `energy`/`density` keep their own
+        # dedicated weights (training.energy_weight / density_weight). A weight of
+        # 0 (the default for vxc/dm) switches a target off. Passed as a hashable
+        # tuple of (name, weight) pairs so it can be a static jit argument.
+        target_weights=_target_weights(config),
     )
+
+
+# Non-energy loss terms, all scored at the converged state and switched on by a
+# non-zero weight (see qex.scf.targets). `energy` is the one always-on term and
+# keeps its own `training.energy_weight`. `density` defaults ON (weight 1.0, or
+# the legacy `training.density_weight`); `vxc`/`dm` default OFF (0.0).
+_CONVERGED_TARGETS = ("density", "vxc", "dm")
+
+
+def _target_weights(config: Config) -> tuple[tuple[str, float], ...]:
+    """Read per-target loss weights from config as a hashable (name, weight) tuple.
+
+    One map drives every non-energy loss: ``training.target_weights`` keyed by
+    target name. A target is *on* iff its weight is non-zero. Defaults: ``density``
+    is on (weight 1.0, or the legacy ``training.density_weight`` if set), while
+    ``vxc``/``dm`` are off (0.0) until you give them a weight. ``energy`` is not
+    here — it is always on via ``training.energy_weight``.
+    """
+    weights = config.get("training.target_weights", {}) or {}
+    defaults = {
+        "density": config.get("training.density_weight", 1.0),
+        "vxc": 0.0,
+        "dm": 0.0,
+    }
+    return tuple(
+        (name, float(weights.get(name, defaults[name]))) for name in _CONVERGED_TARGETS
+    )
+
+
+# Converged-state targets that are NOT always stored (need the reference method to
+# produce them, e.g. a KS Vxc). `dm` is a core field and always present, so it is
+# not listed here. Mirrors qex.data_io.dataset._OPTIONAL_TARGET_FIELDS.
+_OPTIONAL_TARGET_NAMES = ("vxc",)
+
+
+def _ensure_optional_targets_available(
+    dataset: QexDataset,
+    config: Config,
+    data_generator: DataGenerator,
+    *,
+    splits: tuple[str, ...],
+    dataset_file: str | None,
+) -> None:
+    """Guarantee every requested optional target is present on the training data.
+
+    A target is *requested* when its ``training.target_weights`` entry is > 0.
+    For an optional target (``vxc``), a dataset built before the target existed
+    will not carry it. This is caught up front:
+
+    - With ``data.recompute_missing_targets: true`` (default false), the missing
+      target is recomputed from PySCF per affected sample (``reference_vxc``) and
+      written onto the in-memory datapoints so training proceeds. (This recompute
+      is per-run and not persisted back to the ``.h5``; regenerate the dataset to
+      store it permanently.)
+    - Otherwise it raises a clear, actionable error rather than silently training
+      against a target that is absent for some samples.
+    """
+    on = {name for name, w in _target_weights(config) if w > 0.0}
+    requested_optional = [n for n in _OPTIONAL_TARGET_NAMES if n in on]
+    if not requested_optional:
+        return
+
+    recompute = config.get("data.recompute_missing_targets", False)
+    for name in requested_optional:
+        missing = [
+            dp for split in splits for dp in dataset.converged(split)
+            if getattr(dp, name) is None
+        ]
+        if not missing:
+            continue
+        if not recompute:
+            where = f" at {dataset_file}" if dataset_file else ""
+            raise ValueError(
+                f"target_weights[{name!r}] > 0 but {len(missing)} training/val "
+                f"sample(s) in the dataset{where} have no {name!r} target "
+                f"(it was generated before {name!r} was added, or the reference "
+                f"method does not produce it). Regenerate the dataset, set "
+                f"data.recompute_missing_targets: true to recompute {name!r} via "
+                f"PySCF, or set target_weights.{name} to 0 to disable it."
+            )
+        logger.info(
+            "Recomputing missing {!r} target for {} sample(s) via PySCF...",
+            name, len(missing),
+        )
+        for dp in missing:
+            _recompute_target(dp, name, data_generator)
+
+
+def _recompute_target(dp, name: str, data_generator: DataGenerator) -> None:
+    """Recompute one optional target on a datapoint in place (PySCF).
+
+    Re-runs the reference for ``dp.meta`` and fills ``dp.<name>``. Only ``vxc`` is
+    supported; ``vxc`` is undefined for a non-KS reference, which is reported as a
+    clear error (such a dataset cannot supply a Vxc target at all).
+    """
+    if name != "vxc":
+        raise ValueError(f"No recompute rule for target {name!r}.")
+    mol, mf, dm, _energy, _density, _coords = data_generator.generate_data(dp.meta)
+    vxc = reference_vxc(mol, mf, dm, dp.meta.method)
+    if vxc is None:
+        raise ValueError(
+            f"Cannot recompute a 'vxc' target for {dp.meta.name!r}: its reference "
+            f"method {dp.meta.method!r} has no Kohn-Sham Vxc (only method='rks' "
+            f"defines one). Use an RKS reference or disable the vxc target."
+        )
+    dp.vxc = np.asarray(vxc)
 
 
 def build_network(config: Config) -> tuple[nn.Module, Callable, dict, bool]:
@@ -285,28 +399,39 @@ def _pack_sample(
     data_generator: DataGenerator,
     cfg: MoleculeConfig,
     required_features: tuple[str, ...],
-):
-    """Generate one molecule's data and pack it into the training-loop tuple.
+) -> SCFInputs:
+    """Generate one molecule's data and pack it into an :class:`SCFInputs`.
 
-    Builds the fixed core-input tuple plus the named feature bag, narrowed to the
-    network's ``required_features`` (see :mod:`qex.functionals.features`).
+    The named feature bag is narrowed to the network's ``required_features``
+    (see :mod:`qex.functionals.features`); the reference-target bag carries the
+    energy/density/dm (and ``vxc`` for a KS reference) the loss regresses against
+    (see :mod:`qex.scf.targets`).
     """
     mol, mf, dm, energy, density, coords = data_generator.generate_data(cfg)
-    core_inputs = (
-        mol.intor("int2e", aosym="s1"),
-        get_ao_value(mol, mf.grids.coords),
-        mf.grids.weights,
-        mf.get_ovlp(mol),
-        mf.get_hcore(mol),
-        mol.energy_nuc(),
-        mol.nelectron,
-    )
     available = {
         "grid_coords": jnp.asarray(mf.grids.coords),
         "atom_coords": jnp.asarray(mol.atom_coords()),
     }
-    features = select(available, required_features)
-    return (energy, jnp.c_[coords, density], core_inputs, features, dm)
+    targets = {
+        "energy": jnp.asarray(float(energy)),
+        "density": jnp.asarray(density),
+        "dm": jnp.asarray(dm),
+    }
+    vxc = reference_vxc(mol, mf, dm, cfg.method)
+    if vxc is not None:
+        targets["vxc"] = jnp.asarray(vxc)
+    return SCFInputs(
+        dm=jnp.asarray(dm),
+        eri=jnp.asarray(mol.intor("int2e", aosym="s1")),
+        ao_grid=jnp.asarray(get_ao_value(mol, mf.grids.coords)),
+        grid_weights=jnp.asarray(mf.grids.weights),
+        s1e=jnp.asarray(mf.get_ovlp(mol)),
+        h1e=jnp.asarray(mf.get_hcore(mol)),
+        energy_nuc=jnp.asarray(float(mol.energy_nuc())),
+        nelectron=jnp.asarray(int(mol.nelectron)),
+        features=select(available, required_features),
+        targets=targets,
+    )
 
 
 def assemble_training_data(
@@ -316,22 +441,17 @@ def assemble_training_data(
     required_features: tuple[str, ...],
     split: str = "train",
 ) -> list:
-    """Generate reference data for ``split`` in the :func:`qex.train` format (inline).
+    """Generate reference data for ``split`` as a list of :class:`SCFInputs` (inline).
 
-    This is the **no-file** route: it generates and packs straight to training
-    tuples in memory, nothing is written to disk. Use it when you want tuples
-    without the HDF5 dataset layer.
+    This is the **no-file** route: it generates and packs straight to
+    :class:`SCFInputs` in memory, nothing is written to disk. Use it when you
+    want the bundles without the HDF5 dataset layer.
 
     For the normal pipeline prefer :func:`dataset_for_config`, which is
     file-backed, **resumable**, and records non-converged systems -- then call
-    :meth:`QexDataset.training_tuples`. The two produce equivalent tuples; this
-    one trades persistence/resumability for simplicity.
-
-    Each entry is ``(energy, coords_and_density, precomputed, dm)`` where
-    ``precomputed`` carries the SCF inputs (ERIs, AO values on the grid,
-    overlap/core Hamiltonian, etc.), plus grid/atom coordinates when a
-    descriptor network needs them. The geometries for ``split`` are taken from
-    ``data.{split}_bond_lengths``.
+    :meth:`QexDataset.training_inputs`. The two produce equivalent bundles; this
+    one trades persistence/resumability for simplicity. The geometries for
+    ``split`` are taken from ``data.{split}_bond_lengths``.
     """
     molecule_configs = molecule_configs_for_split(
         config, molecule_config_factory, split
@@ -561,13 +681,21 @@ def run_experiment(
             cache_path=dataset_file,
             use_cache=config.get("data.cache_dataset", True),
         )
+    # If a converged-state target (e.g. vxc) is switched on (weight > 0), make
+    # sure every training/val sample actually carries it — recomputing via PySCF
+    # when allowed, or failing loudly with an actionable message otherwise.
+    _ensure_optional_targets_available(
+        dataset, config, data_generator, splits=("train", "val"),
+        dataset_file=dataset_file if from_file else None,
+    )
+
     # Each sample's feature bag is narrowed to exactly the keys this network
     # declared (`required_features`), so the vmapped SCF loop never hands a model
     # a feature it can't accept and one .h5 serves any model. A missing key fails
     # loudly by name inside `select`; surface a rebuild hint when that happens.
     try:
-        training_data = dataset.training_tuples("train", required_features)
-        val_data = dataset.training_tuples("val", required_features)
+        training_data = dataset.training_inputs("train", required_features)
+        val_data = dataset.training_inputs("val", required_features)
     except KeyError as exc:
         raise ValueError(
             f"This model requires features {list(required_features)}, but the "

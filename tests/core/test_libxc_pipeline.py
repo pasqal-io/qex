@@ -24,6 +24,7 @@ from qex.functionals.libxc_veff import (
     make_eval_xc_libxc_ref,
     make_libxc_ingredients,
 )
+from qex.scf.inputs import SCFInputs
 from qex.scf.rks import rks_energy
 
 jax.config.update("jax_enable_x64", True)
@@ -68,11 +69,17 @@ def _pyscf_reference(xc_code: str):
 def _qex_libxc_energy(xc_code, mol, coords, inp, **kw):
     """Run qex `rks_energy` with encoding='libxc' for a standard functional."""
     ingredients = make_libxc_ingredients(mol, coords, xc_code)
+    scf_inp = SCFInputs(
+        dm=inp["dm"], eri=inp["eri"], ao_grid=inp["ao_grid"],
+        grid_weights=inp["grid_weights"], s1e=inp["s1e"], h1e=inp["h1e"],
+        energy_nuc=jnp.asarray(inp["energy_nuc"]),
+        nelectron=jnp.asarray(inp["nelectron"]),
+        features={}, targets={},  # forward-only eval: no targets needed
+    )
     return float(
         rks_energy(
             ingredients,  # `params` carries the libxc ingredients
-            inp["dm"], inp["eri"], inp["ao_grid"], inp["grid_weights"],
-            inp["s1e"], inp["h1e"], inp["energy_nuc"], inp["nelectron"],
+            scf_inp,
             xc_eval_fn=make_eval_xc_libxc_ref(xc_code),  # never called
             encoding="libxc",
             frac_enabled=0,  # integer aufbau, matches vanilla closed-shell RKS

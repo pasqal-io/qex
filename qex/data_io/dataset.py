@@ -97,7 +97,11 @@ import jax.numpy as jnp
 import numpy as np
 from loguru import logger
 
-from qex.data_io.dataset_generation import DataGenerator, MoleculeConfig
+from qex.data_io.dataset_generation import (
+    DataGenerator,
+    MoleculeConfig,
+    reference_vxc,
+)
 
 FORMAT_VERSION = 1
 
@@ -125,6 +129,14 @@ _ARRAY_FIELDS = (
 # its name here + a field on Datapoint + producing it — no index surgery, no
 # change to the SCF loop.
 _OPTIONAL_ARRAY_FIELDS = ("grid_coords", "atom_coords")
+
+# Optional, extensible *reference targets* (see qex.scf.targets): named arrays the
+# trained functional is regressed against, beyond the always-present energy /
+# density / dm. Stored as optional HDF5 datasets and surfaced in the per-sample
+# target bag (NOT the feature bag). Produced only when the reference method can
+# supply them (e.g. "vxc" only for a KS reference). Adding a target means adding
+# its name here + a field on Datapoint + producing it + a qex.scf.targets entry.
+_OPTIONAL_TARGET_FIELDS = ("vxc",)
 
 
 def datapoint_uid(meta: MoleculeConfig) -> str:
@@ -176,6 +188,10 @@ class Datapoint:
     nelectron: int | None = None
     grid_coords: np.ndarray | None = None
     atom_coords: np.ndarray | None = None
+    # Reference XC potential matrix (AO basis), a regression target. Only defined
+    # for a KS reference (method='rks'); None for correlated refs (CCSD/FCI),
+    # which have no Kohn-Sham Vxc by construction (see qex.scf.targets).
+    vxc: np.ndarray | None = None
     converged: bool = True
     error: str = ""
 
@@ -209,44 +225,58 @@ class Datapoint:
         """Construct a failure record for a system that did not converge/raised."""
         return cls(meta=meta, converged=False, error=error)
 
-    def to_training_tuple(self, required_features: tuple[str, ...] = ()) -> tuple:
-        """Pack into ``(energy, coords_density, core_inputs, features, dm)``.
+    @property
+    def targets(self) -> dict:
+        """The named reference-target bag for this system (see qex.scf.targets).
 
-        This is exactly the structure consumed by :func:`qex.train` and the SCF
-        loops, so loading a dataset is a drop-in for inline generation.
+        Always carries ``energy`` / ``density`` / ``dm`` (every reference defines
+        them), plus each optional target this datapoint actually stored (e.g.
+        ``vxc`` for a KS reference). The SCF loss scores exactly the keys present
+        here; a correlated reference simply omits ``vxc``. Adding a target field
+        to :class:`Datapoint` + :data:`_OPTIONAL_TARGET_FIELDS` surfaces it here
+        automatically — no change to this property.
+        """
+        bag = {
+            "energy": jnp.asarray(float(self.energy)),
+            "density": jnp.asarray(self.density),
+            "dm": jnp.asarray(self.dm),
+        }
+        for name in _OPTIONAL_TARGET_FIELDS:
+            value = getattr(self, name)
+            if value is not None:
+                bag[name] = jnp.asarray(value)
+        return bag
 
-        - ``core_inputs`` is the fixed positional tuple of SCF physics arrays
-          ``(eri, ao_grid, grid_weights, s1e, h1e, energy_nuc, nelectron)`` —
-          every closed-shell RKS run needs exactly these.
-        - ``features`` is the named model-feature bag narrowed to
-          ``required_features`` (the consuming network's declared keys; default
-          none). A model thus only ever sees the features it asked for, and a
-          missing one fails loudly by name — no per-model flag, no extras leaking
-          into a model that can't accept them.
+    def to_scf_inputs(self, required_features: tuple[str, ...] = ()) -> "SCFInputs":
+        """Pack into the :class:`~qex.scf.inputs.SCFInputs` bundle the SCF losses
+        consume, so loading a dataset is a drop-in for inline generation.
+
+        The physics arrays (``eri``, the AO/grid tensors, ``s1e``/``h1e``,
+        ``energy_nuc``, ``nelectron``) become the corresponding fields; ``dm`` is
+        the SCF initial guess. ``features`` is the named model-feature bag and
+        ``targets`` the named reference-target bag, both narrowed/assembled by
+        their respective producers — a model sees only the features it declared,
+        and the loss scores only the targets the reference produced.
         """
         from qex.functionals.features import select
+        from qex.scf.inputs import SCFInputs
 
         if not self.converged:
             raise ValueError(
                 f"Datapoint {self.meta.name!r} did not converge; it has no data "
                 f"to train on. Filter with `converged` before calling this."
             )
-        core_inputs = (
-            jnp.asarray(self.eri),
-            jnp.asarray(self.ao_grid),
-            jnp.asarray(self.grid_weights),
-            jnp.asarray(self.s1e),
-            jnp.asarray(self.h1e),
-            float(self.energy_nuc),
-            int(self.nelectron),
-        )
-        coords_density = jnp.c_[jnp.asarray(self.coords), jnp.asarray(self.density)]
-        return (
-            float(self.energy),
-            coords_density,
-            core_inputs,
-            select(self.features, required_features),
-            jnp.asarray(self.dm),
+        return SCFInputs(
+            dm=jnp.asarray(self.dm),
+            eri=jnp.asarray(self.eri),
+            ao_grid=jnp.asarray(self.ao_grid),
+            grid_weights=jnp.asarray(self.grid_weights),
+            s1e=jnp.asarray(self.s1e),
+            h1e=jnp.asarray(self.h1e),
+            energy_nuc=jnp.asarray(float(self.energy_nuc)),
+            nelectron=jnp.asarray(int(self.nelectron)),
+            features=select(self.features, required_features),
+            targets=self.targets,
         )
 
 
@@ -273,16 +303,16 @@ class QexDataset:
         """Count of non-converged (failure) records in a split."""
         return sum(1 for dp in self.split(name) if not dp.converged)
 
-    def training_tuples(
+    def training_inputs(
         self, name: str, required_features: tuple[str, ...] = ()
-    ) -> list[tuple]:
-        """The split's *converged* datapoints as training tuples (see Datapoint).
+    ) -> list["SCFInputs"]:
+        """The split's *converged* datapoints as :class:`SCFInputs` (see Datapoint).
 
-        Each tuple's feature bag is narrowed to ``required_features``, so one
+        Each sample's feature bag is narrowed to ``required_features``, so one
         dataset serves any model with no per-model flag.
         """
         return [
-            dp.to_training_tuple(required_features) for dp in self.converged(name)
+            dp.to_scf_inputs(required_features) for dp in self.converged(name)
         ]
 
     def uids(self, name: str) -> set[str]:
@@ -337,7 +367,7 @@ def _write_datapoint(group: h5py.Group, dp: Datapoint) -> None:
 
     for name in _ARRAY_FIELDS:
         group.create_dataset(name, data=np.asarray(getattr(dp, name)))
-    for name in _OPTIONAL_ARRAY_FIELDS:
+    for name in (*_OPTIONAL_ARRAY_FIELDS, *_OPTIONAL_TARGET_FIELDS):
         value = getattr(dp, name)
         if value is not None:
             group.create_dataset(name, data=np.asarray(value))
@@ -365,7 +395,9 @@ def _read_datapoint(group: h5py.Group) -> Datapoint:
 
     arrays = {name: group[name][()] for name in _ARRAY_FIELDS}
     optional = {
-        name: group[name][()] for name in _OPTIONAL_ARRAY_FIELDS if name in group
+        name: group[name][()]
+        for name in (*_OPTIONAL_ARRAY_FIELDS, *_OPTIONAL_TARGET_FIELDS)
+        if name in group
     }
     return Datapoint(
         meta=meta,
@@ -551,6 +583,7 @@ def _datapoint_from_generation(
         nelectron=int(mol.nelectron),
         grid_coords=grid_coords,
         atom_coords=atom_coords,
+        vxc=reference_vxc(mol, mf, dm, cfg.method),
     )
 
 

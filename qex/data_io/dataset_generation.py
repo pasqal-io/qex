@@ -576,3 +576,28 @@ if __name__ == "__main__":
     logger.debug(f"DM AO: {dm_ao}")
     logger.debug(f"Molecule: {mol}")
     logger.debug(f"Mean field: {mf}")
+
+
+def reference_vxc(mol, mf, dm, method: str) -> npt.NDArray | None:
+    """Reference XC potential matrix (AO basis), or ``None`` when undefined.
+
+    For a Kohn-Sham reference (``method='rks'``) this is the XC part of the KS
+    effective potential, ``Vxc = get_veff(dm) - J(dm)`` — matching the qex SCF
+    convention where ``get_veff`` returns ``J + Vxc``, so the trained functional's
+    ``vhf - J`` regresses against exactly this matrix.
+
+    Correlated references (CCSD/FCI) have no Kohn-Sham ``Vxc`` by construction, so
+    this returns ``None`` and the sample simply carries no ``vxc`` target (a
+    density-inversion potential is left as future work; see qex.scf.targets).
+    """
+    if method.lower() != "rks":
+        return None
+    # Build Vxc directly from the converged density on the grid via PySCF's
+    # numerical integrator, rather than `get_veff - J`. The generator imports
+    # pyscfad, which monkeypatches `get_veff` to return a jax-traced tagged array
+    # that does not coerce to a plain ndarray — so the subtraction route is
+    # fragile. `nr_rks` returns the XC matrix in the AO basis directly, which is
+    # exactly the `Vxc` the qex SCF assembles (Σ ao·w·vrho·ao).
+    ni = numint.NumInt()
+    _n, _exc, vxc = ni.nr_rks(mol, mf.grids, mf.xc, np.asarray(dm))
+    return np.asarray(vxc)

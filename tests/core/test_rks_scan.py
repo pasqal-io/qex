@@ -24,6 +24,7 @@ from pyscf import dft, gto
 
 from qex.functionals.mlp import GlobalMLP
 from qex.functionals.xc import make_eval_xc_global
+from qex.scf.inputs import SCFInputs
 from qex.scf.operators import get_ao_value
 from qex.scf.rks import rks_loss, rks_loss_scan
 
@@ -87,25 +88,33 @@ _FRAC = dict(
 )
 
 
+def _scf_inputs(inputs) -> SCFInputs:
+    """Pack the fixture dict into the SCFInputs bundle the losses now take."""
+    return SCFInputs(
+        dm=inputs["dm"], eri=inputs["eri"], ao_grid=inputs["ao_grid"],
+        grid_weights=inputs["grid_weights"], s1e=inputs["s1e"], h1e=inputs["h1e"],
+        energy_nuc=jnp.asarray(inputs["energy_nuc"]),
+        nelectron=jnp.asarray(inputs["nelectron"]),
+        features={},
+        targets={
+            "energy": jnp.asarray(inputs["exact_energy"]),
+            "density": inputs["exact_density"],
+            "dm": inputs["dm"],
+        },
+    )
+
+
 def _call_rks_loss(inputs, **kw):
     return float(rks_loss(
-        inputs["params"], inputs["dm"], inputs["eri"], inputs["ao_grid"],
-        inputs["grid_weights"], inputs["s1e"], inputs["h1e"],
-        inputs["energy_nuc"], inputs["nelectron"],
-        inputs["exact_energy"], inputs["exact_density"], inputs["dm"],
-        xc_eval_fn=inputs["xc_eval_fn"], encoding="global",
-        **_FRAC, **kw,
+        inputs["params"], _scf_inputs(inputs),
+        xc_eval_fn=inputs["xc_eval_fn"], encoding="global", **_FRAC, **kw,
     ))
 
 
 def _call_rks_loss_scan(inputs, **kw):
     return float(rks_loss_scan(
-        inputs["params"], inputs["dm"], inputs["eri"], inputs["ao_grid"],
-        inputs["grid_weights"], inputs["s1e"], inputs["h1e"],
-        inputs["energy_nuc"], inputs["nelectron"],
-        inputs["exact_energy"], inputs["exact_density"], inputs["dm"],
-        xc_eval_fn=inputs["xc_eval_fn"], encoding="global",
-        **_FRAC, **kw,
+        inputs["params"], _scf_inputs(inputs),
+        xc_eval_fn=inputs["xc_eval_fn"], encoding="global", **_FRAC, **kw,
     ))
 
 
@@ -157,13 +166,9 @@ def test_rks_with_diis_legacy_vs_scan(h2_inputs):
 def test_rks_loss_scan_runs_under_grad(h2_inputs):
     """Smoke check: the scan loss must be differentiable end-to-end."""
     def loss_of_params(p):
-        inp = {**h2_inputs, "params": p}
         return rks_loss_scan(
-            inp["params"], inp["dm"], inp["eri"], inp["ao_grid"],
-            inp["grid_weights"], inp["s1e"], inp["h1e"],
-            inp["energy_nuc"], inp["nelectron"],
-            inp["exact_energy"], inp["exact_density"], inp["dm"],
-            xc_eval_fn=inp["xc_eval_fn"], encoding="global",
+            p, _scf_inputs(h2_inputs),
+            xc_eval_fn=h2_inputs["xc_eval_fn"], encoding="global",
             max_cycle=3, ignore_ks_iter=0,
             use_diis=True, diis_max_vec=4, diis_min_vec=2,
             diis_start_cycle=1, diis_damping=0.0,

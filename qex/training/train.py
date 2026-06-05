@@ -20,6 +20,8 @@ import jax.numpy as jnp
 import optax
 from tqdm import tqdm
 
+from qex.scf.inputs import SCFInputs
+
 
 @dataclass
 class TrainHistory:
@@ -43,69 +45,31 @@ class TrainHistory:
     stopped_early: bool = False
 
 
-def _stack_inputs(data: list) -> tuple:
-    """Stack a list of ``(energy, coords_density, core_inputs, features, dm)``.
+def _batch_inputs(data: list) -> "SCFInputs":
+    """Stack a list of per-sample :class:`SCFInputs` into one batched pytree.
 
-    Returns ``(core_batched, features_batched)`` where:
-
-    - ``core_batched`` is the tuple of batched core arrays consumed positionally
-      by the vmapped SCF loss (``dm, eri, …, exact_dm``) — fixed and unchanged.
-    - ``features_batched`` is the named model-feature bag with each array stacked
-      along a new leading batch axis (a ``dict[str, Array]``, possibly empty).
-      It is passed as the SCF loss's ``features`` argument; the network selects
-      the subset it declares. Adding a feature needs no change here — every key
-      the producer emits is stacked automatically.
+    Every leaf (physics arrays, targets, and each feature-bag entry) gains a
+    leading batch axis; the result is what ``jax.vmap(loss, in_axes=(None, 0))``
+    consumes. Adding an input needs no change here — :meth:`SCFInputs.stack`
+    tree-maps over whatever fields the bundle carries.
     """
-    # Transpose the list of per-sample tuples into columns we can batch.
-    energies, coords_density, core_inputs, bags, dms = zip(*data)
-    eri, ao_grid, weights, s1e, h1e, e_nuc, nelec = zip(*core_inputs)
-
-    dm = jnp.stack(dms)
-    core = (
-        dm,                                          # dm
-        jnp.stack(eri),                              # eri
-        jnp.stack(ao_grid),                          # ao_grid
-        jnp.stack(weights),                          # grid_weights
-        jnp.stack(s1e),                              # s1e
-        jnp.stack(h1e),                              # h1e
-        jnp.array(e_nuc),                            # energy_nuc
-        jnp.array(nelec),                            # nelectron
-        jnp.array(energies),                         # exact_energy
-        jnp.stack([cd[:, 3] for cd in coords_density]),  # exact_density
-        dm,                                          # exact_dm (== dm for now)
-    )
-
-    # Stack the per-sample feature bags into one batched bag. All samples must
-    # carry the same keys; assert that loudly rather than silently dropping a
-    # feature for some samples.
-    keys = tuple(bags[0])
-    if any(tuple(bag) != keys for bag in bags):
-        raise ValueError(
-            f"Inconsistent feature keys across samples (first sample has {keys}). "
-            f"Every datapoint in a split must carry the same features."
-        )
-    features = {k: jnp.stack([bag[k] for bag in bags]) for k in keys}
-
-    return jax.device_put((core, features))
+    return jax.device_put(SCFInputs.stack(data))
 
 
-def _make_loss_fn(scf_loss_fn: Callable, xc_eval_fn: Callable, inputs: tuple, scf_kwargs):
-    """Build a jitted ``params -> mean loss`` closure over fixed ``inputs``.
+def _make_loss_fn(scf_loss_fn: Callable, xc_eval_fn: Callable, batch: "SCFInputs", scf_kwargs):
+    """Build a jitted ``params -> mean loss`` closure over a fixed ``batch``.
 
-    ``inputs`` is ``(core_batched, features_batched)`` from :func:`_stack_inputs`.
-    Core arrays are mapped over the batch axis (``in_axes=0``); the feature bag
-    is one more vmapped argument whose ``in_axes`` is a dict ``{k: 0}`` (an empty
-    bag is a trivial pytree, so a no-feature model maps over nothing).
+    ``batch`` is one batched :class:`SCFInputs` (from :func:`_batch_inputs`).
+    ``params`` is shared across the batch (``in_axes=None``); the whole bundle is
+    mapped over its leading batch axis (``in_axes=0``), which maps every leaf —
+    physics arrays, targets, and feature-bag entries alike — with no per-field
+    axis bookkeeping.
     """
-    core, features = inputs
     scf_fn = partial(scf_loss_fn, xc_eval_fn=xc_eval_fn, **scf_kwargs)
-    core_axes = (0,) * len(core)
-    feat_axes = {k: 0 for k in features}
-    in_axes = (None, *core_axes, feat_axes)
 
     @jax.jit
     def loss_fn(params):
-        losses = jax.vmap(scf_fn, in_axes=in_axes)(params, *core, features)
+        losses = jax.vmap(scf_fn, in_axes=(None, 0))(params, batch)
         return jnp.mean(losses)
 
     return loss_fn
@@ -128,13 +92,11 @@ def train(
 ):
     """vmap-batched SCF training over a fixed dataset, with optional validation.
 
-    `training_data` (and `val_data`) is a list of tuples
-    (energy, coords_and_density, core_inputs, features, dm) where `core_inputs`
-    is (eri, ao_grid, grid_weights, s1e, h1e, energy_nuc, nelectron) and
-    `features` is the named model-feature bag (a possibly-empty dict, see
-    qex.functionals.features). `scf_loss_fn` takes (params, dm, eri, ao_grid,
-    grid_weights, s1e, h1e, energy_nuc, nelectron, exact_energy, exact_density,
-    exact_dm, features, **kwargs) and returns a scalar loss.
+    `training_data` (and `val_data`) is a list of per-sample
+    :class:`qex.scf.inputs.SCFInputs` (e.g. from
+    :meth:`QexDataset.training_inputs`). `scf_loss_fn` takes
+    ``(params, inp: SCFInputs, **kwargs)`` and returns a scalar loss; it is
+    vmapped over the batch with `params` shared.
 
     Args:
         val_data: Optional validation set. When given, validation loss is
@@ -153,13 +115,13 @@ def train(
     """
     opt_state = optimizer.init(params)
 
-    train_inputs = _stack_inputs(training_data)
-    loss_fn = _make_loss_fn(scf_loss_fn, xc_eval_fn, train_inputs, scf_kwargs)
+    train_batch = _batch_inputs(training_data)
+    loss_fn = _make_loss_fn(scf_loss_fn, xc_eval_fn, train_batch, scf_kwargs)
 
     val_loss_fn = None
     if val_data:
-        val_inputs = _stack_inputs(val_data)
-        val_loss_fn = _make_loss_fn(scf_loss_fn, xc_eval_fn, val_inputs, scf_kwargs)
+        val_batch = _batch_inputs(val_data)
+        val_loss_fn = _make_loss_fn(scf_loss_fn, xc_eval_fn, val_batch, scf_kwargs)
 
     @jax.jit
     def update_fn(params, opt_state):

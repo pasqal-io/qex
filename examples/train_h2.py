@@ -38,6 +38,9 @@ from qex.training import (
     plot_dissociation_profile,
     train,
 )
+# Shared helper: converts config.training.target_weights into the hashable tuple
+# the SCF loss takes (same as the `qex train` CLI uses).
+from qex.training.experiment import _target_weights
 
 CONFIG_PATH = Path(__file__).with_name("h2.yaml")
 
@@ -45,7 +48,7 @@ CONFIG_PATH = Path(__file__).with_name("h2.yaml")
 # time and kept for the DIIS-based evaluation loop (`rks_energy`).
 _DIIS_ONLY_KEYS = ("diis_max_vec", "diis_min_vec", "diis_start_cycle", "diis_damping")
 # Train-only kwargs the eval energy fn (`rks_energy`) does not accept.
-_TRAIN_ONLY_KEYS = ("differentiation",)
+_TRAIN_ONLY_KEYS = ("differentiation", "target_weights")
 
 
 def _scf_kwargs(config: Config) -> dict:
@@ -73,6 +76,9 @@ def _scf_kwargs(config: Config) -> dict:
         # or "implicit" (implicit-function-theorem on the fixed point; cost
         # independent of max_cycle). Eval (`rks_energy`) ignores it.
         differentiation=config.get("scf.differentiation", "unroll"),
+        # Per-target loss weights for the extra converged-state targets (vxc, dm);
+        # 0 = off (default). energy/density keep their own weights above.
+        target_weights=_target_weights(config),
     )
 
 
@@ -114,8 +120,8 @@ def main() -> None:
     # Pass `required_features` so the per-sample feature bag carries the arrays the
     # network needs (e.g. the descriptor's grid_coords/atom_coords). Omitting it
     # yields an empty bag and the descriptor raises "missing grid_coords".
-    training_data = dataset.training_tuples("train", required_features)
-    val_data = dataset.training_tuples("val", required_features)
+    training_data = dataset.training_inputs("train", required_features)
+    val_data = dataset.training_inputs("val", required_features)
     test_configs = [dp.meta for dp in dataset.test]
     logger.info(
         "Data split -> train: {} | val: {} | test: {}",

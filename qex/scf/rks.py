@@ -53,6 +53,8 @@ from qex.linalg.generalized_eigensolver import generalized_eigh
 from qex.linalg.ks_solvers import lobpcg_solve, mcweeny_purify
 from qex.scf.fermi import get_fractional_occupations_jax
 from qex.scf.implicit_diff import custom_fixed_point
+from qex.scf.inputs import SCFInputs
+from qex.scf.targets import SCFState, target_loss
 from qex.scf.jax_diis import apply_diis, initialize_diis
 from qex.scf.jax_diis_scan import (
     apply_diis_scan,
@@ -67,9 +69,16 @@ from qex.scf.operators import (
 
 
 def _occ_step(mo_energy: Array, nelectron: int, frac_enabled: int, **frac_kwargs):
-    """Choose between fractional Fermi-Dirac occupations and aufbau."""
+    """Choose between fractional Fermi-Dirac occupations and aufbau.
 
-    def frac_branch(_):
+    `frac_enabled` is a static (compile-time) flag in every caller, so this is a
+    plain Python `if`, not `jax.lax.cond`: only the selected branch is traced.
+    A `cond` would trace BOTH branches into the graph — pulling the whole
+    fractional-occupation chemical-potential solve into an integer-aufbau run
+    only to dead-code-eliminate it — needlessly inflating the jaxpr and compile
+    time.
+    """
+    if frac_enabled == 1:
         mo_occ, energy_entr, _mu, _loss = get_fractional_occupations_jax(
             mo_energy=mo_energy,
             n_electrons=nelectron,
@@ -80,11 +89,7 @@ def _occ_step(mo_energy: Array, nelectron: int, frac_enabled: int, **frac_kwargs
             frac_max_steps=frac_kwargs["frac_max_steps"],
         )
         return mo_occ, energy_entr
-
-    def integer_branch(_):
-        return get_occ(nelectron, mo_energy), jnp.array(0.0)
-
-    return jax.lax.cond(frac_enabled == 1, frac_branch, integer_branch, None)
+    return get_occ(nelectron, mo_energy), jnp.array(0.0)
 
 
 def _solve_density(
@@ -180,6 +185,59 @@ def _solve_density(
     return make_rdm1_custom(mo_coeff, mo_occ), energy_entr
 
 
+def _loss_weights(density_weight, target_weights):
+    """Merge the legacy ``density_weight`` kwarg into the ``target_weights`` map.
+
+    Density is now a normal registry target keyed by weight (default on). The
+    standalone ``density_weight`` argument is kept for back-compat and seeds the
+    ``density`` weight unless ``target_weights`` overrides it explicitly. Returns
+    a plain ``{name: weight}`` dict.
+    """
+    weights = {"density": density_weight}
+    weights.update(dict(target_weights))
+    return weights
+
+
+def _converged_target_loss(
+    dm_final, h1e, eri, ao_grid, grid_weights, energy_nuc, params,
+    xc_eval_fn, encoding, features, targets, target_weights,
+):
+    """Loss for the converged-state reference targets via the registry.
+
+    Every loss term except ``energy`` is scored here at the converged density:
+    ``density``, ``vxc``, ``dm``, and any future target. ``energy`` is the one
+    special case — the loss bodies accumulate it across SCF cycles — so it is
+    skipped. ``target_weights`` is a hashable tuple of ``(name, weight)`` pairs;
+    weight 0 (or absent) switches a target off (see :func:`target_loss`).
+
+    Only the quantities an *active* target needs are computed: ``rho`` and ``dm``
+    are cheap, but ``vxc``/``e_tot`` need an extra ``get_veff`` — done only when a
+    target requiring it is on, so a density-only run pays nothing extra.
+    """
+    weights = dict(target_weights)  # accepts a dict or a (name, weight) tuple
+    active = {
+        k: v for k, v in targets.items()
+        if k != "energy" and weights.get(k, 0.0) != 0.0
+    }
+    if not active:
+        return jnp.asarray(0.0, dtype=jnp.float64)
+
+    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm_final, ao_grid)
+    # `vxc` is the only target that needs the (relatively costly) get_veff at the
+    # converged density; build the matrix-valued fields lazily.
+    if "vxc" in active:
+        vhf, exc_energy, J = get_veff(
+            dm_final, eri, ao_grid, grid_weights, params, xc_eval_fn,
+            encoding=encoding, features=features,
+        )
+        e_tot, vxc = energy_tot(dm_final, h1e, J, exc_energy, energy_nuc), vhf - J
+    else:
+        e_tot = vxc = None
+
+    state = SCFState(e_tot=e_tot, dm=dm_final, rho=rho, vxc=vxc)
+    return target_loss(state, active, weights, skip=("energy",))
+
+
 @partial(
     jax.jit,
     static_argnames=(
@@ -199,22 +257,12 @@ def _solve_density(
         "frac_mu_shift",
         "frac_step_grad",
         "frac_max_steps",
+        "target_weights",
     ),
 )
 def rks_loss(
     params: dict,
-    dm: Array,
-    eri: Array,
-    ao_grid: Array,
-    grid_weights: Array,
-    s1e: Array,
-    h1e: Array,
-    energy_nuc: float,
-    nelectron: int,
-    exact_energy: float,
-    exact_density: Array,
-    exact_dm: Array,
-    features: dict | None = None,
+    inp: SCFInputs,
     *,
     xc_eval_fn: Callable,
     encoding: str = "local",
@@ -227,6 +275,7 @@ def rks_loss(
     discount_coeffs: Array | None = None,
     energy_weight: float = 1.0,
     density_weight: float = 1.0,
+    target_weights: tuple = (),
     frac_enabled: int = 1,
     frac_theta: float = 0.04,
     frac_mu: float | None = None,
@@ -236,12 +285,19 @@ def rks_loss(
 ) -> Array:
     """Differentiable SCF loop, returns weighted (energy + density) loss.
 
-    `features` is the named model-feature bag (see `qex.functionals.features`),
-    passed straight through to `get_veff` and consumed by the network. The SCF
-    math never reads it, so adding a feature does not touch this loop.
+    `inp` is the per-sample :class:`SCFInputs` bundle (one batched pytree under
+    the training vmap). `inp.features` is the named model-feature bag (see
+    `qex.functionals.features`), passed straight through to `get_veff` and
+    consumed by the network; the SCF math never reads it, so adding a feature
+    does not touch this loop.
     """
 
     logger.info("Compiling/executing SCF loop (rks_loss, unrolled + DIIS)")
+
+    dm, eri, ao_grid, grid_weights = inp.dm, inp.eri, inp.ao_grid, inp.grid_weights
+    s1e, h1e, energy_nuc, nelectron = inp.s1e, inp.h1e, inp.energy_nuc, inp.nelectron
+    features, targets = inp.features, inp.targets
+    exact_energy = targets["energy"]  # density/vxc/dm scored via the registry
 
     vhf, exc_energy, J = get_veff(
         dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
@@ -291,10 +347,15 @@ def rks_loss(
             else:
                 loss += (e_tot - exact_energy) ** 2
 
-    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm, ao_grid)
-    rho_loss = jnp.mean((rho - exact_density) ** 2)
-
-    return energy_weight * loss + density_weight * rho_loss
+    # `energy` is the one special term (accumulated across cycles above). Every
+    # other active loss — density, vxc, dm — is scored at the converged state via
+    # the registry; `dm` here is the converged density after the unroll.
+    weights = _loss_weights(density_weight, target_weights)
+    extra = _converged_target_loss(
+        dm, h1e, eri, ao_grid, grid_weights, energy_nuc, params,
+        xc_eval_fn, encoding, features, targets, weights,
+    )
+    return energy_weight * loss + extra
 
 
 @partial(
@@ -319,22 +380,12 @@ def rks_loss(
         "diis_damping",
         "solver",
         "differentiation",
+        "target_weights",
     ),
 )
 def rks_loss_scan(
     params: dict,
-    dm: Array,
-    eri: Array,
-    ao_grid: Array,
-    grid_weights: Array,
-    s1e: Array,
-    h1e: Array,
-    energy_nuc: float,
-    nelectron: int,
-    exact_energy: float,
-    exact_density: Array,
-    exact_dm: Array,
-    features: dict | None = None,
+    inp: SCFInputs,
     *,
     xc_eval_fn: Callable,
     encoding: str = "local",
@@ -342,6 +393,7 @@ def rks_loss_scan(
     ignore_ks_iter: int = 5,
     energy_weight: float = 1.0,
     density_weight: float = 1.0,
+    target_weights: tuple = (),
     frac_enabled: int = 1,
     frac_theta: float = 0.04,
     frac_mu: float | None = None,
@@ -370,6 +422,10 @@ def rks_loss_scan(
     pre-allocated arrays so the scan carry has a static shape.
 
     Fractional occupations and the `ignore_ks_iter` mask are preserved.
+
+    `inp` is the per-sample :class:`SCFInputs` bundle (one batched pytree under
+    the training vmap); the destructuring below names each field once, after
+    which the SCF body is unchanged.
     """
 
     logger.info(
@@ -378,6 +434,11 @@ def rks_loss_scan(
             "with frac. occ." if frac_enabled else "no frac. occ.",
         )
     )
+
+    dm, eri, ao_grid, grid_weights = inp.dm, inp.eri, inp.ao_grid, inp.grid_weights
+    s1e, h1e, energy_nuc, nelectron = inp.s1e, inp.h1e, inp.energy_nuc, inp.nelectron
+    features, targets = inp.features, inp.targets
+    exact_energy = targets["energy"]  # density/vxc/dm scored via the registry
 
     frac_kwargs = dict(
         frac_theta=frac_theta,
@@ -396,11 +457,11 @@ def rks_loss_scan(
     if differentiation == "implicit":
         return _rks_loss_implicit(
             params, dm, eri, ao_grid, grid_weights, s1e, h1e, energy_nuc,
-            nelectron, exact_energy, exact_density,
+            nelectron, targets,
             features=features, xc_eval_fn=xc_eval_fn, encoding=encoding,
             max_cycle=max_cycle, energy_weight=energy_weight,
-            density_weight=density_weight, frac_enabled=frac_enabled,
-            frac_kwargs=frac_kwargs, solver=solver,
+            density_weight=density_weight, target_weights=target_weights,
+            frac_enabled=frac_enabled, frac_kwargs=frac_kwargs, solver=solver,
         )
 
     fock_size = h1e.size
@@ -460,9 +521,15 @@ def rks_loss_scan(
     final_carry, _ = jax.lax.scan(step, init, cycles)
     dm_final, loss = final_carry[0], final_carry[1]
 
-    rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm_final, ao_grid)
-    rho_loss = jnp.mean((rho - exact_density) ** 2)
-    return energy_weight * loss + density_weight * rho_loss
+    # `energy` is the one special term (accumulated across cycles above). Every
+    # other active loss — density, vxc, dm, ... — is scored at the converged
+    # state via the registry, switched on by a non-zero weight.
+    weights = _loss_weights(density_weight, target_weights)
+    extra = _converged_target_loss(
+        dm_final, h1e, eri, ao_grid, grid_weights, energy_nuc, params,
+        xc_eval_fn, encoding, features, targets, weights,
+    )
+    return energy_weight * loss + extra
 
 
 def _rks_loss_implicit(
@@ -475,8 +542,7 @@ def _rks_loss_implicit(
     h1e: Array,
     energy_nuc: float,
     nelectron: int,
-    exact_energy: float,
-    exact_density: Array,
+    targets: dict,
     *,
     features: dict | None,
     xc_eval_fn: Callable,
@@ -484,6 +550,7 @@ def _rks_loss_implicit(
     max_cycle: int,
     energy_weight: float,
     density_weight: float,
+    target_weights: tuple,
     frac_enabled: int,
     frac_kwargs: dict,
     solver: str,
@@ -556,24 +623,21 @@ def _rks_loss_implicit(
     )
     e_tot = energy_tot(dm_final, h1e, J, exc_energy, energy_nuc) + energy_entr
 
-    energy_loss = (e_tot - exact_energy) ** 2
-
+    # `energy` is the one special term (its multi-cycle accumulation in the scan
+    # loop collapses to the single converged value here). Every other active loss
+    # — density, vxc, dm — is scored via the registry at this same fixed point,
+    # reusing the state we already built (no second get_veff).
+    energy_loss = (e_tot - targets["energy"]) ** 2
     rho = jnp.einsum("gi,ij,gj->g", ao_grid, dm_final, ao_grid)
-    rho_loss = jnp.mean((rho - exact_density) ** 2)
-    return energy_weight * energy_loss + density_weight * rho_loss
+    state = SCFState(e_tot=e_tot, dm=dm_final, rho=rho, vxc=vhf - J)
+    weights = _loss_weights(density_weight, target_weights)
+    extra = target_loss(state, targets, weights, skip=("energy",))
+    return energy_weight * energy_loss + extra
 
 
 def rks_energy(
     params: dict,
-    dm: Array,
-    eri: Array,
-    ao_grid: Array,
-    grid_weights: Array,
-    s1e: Array,
-    h1e: Array,
-    energy_nuc: float,
-    nelectron: int,
-    features: dict | None = None,
+    inp: SCFInputs,
     *,
     xc_eval_fn: Callable,
     encoding: str = "local",
@@ -598,9 +662,15 @@ def rks_energy(
     — train/eval mismatch on DIIS would otherwise drift the dissociation
     profile away from the converged training fixed point.
 
-    `features` is the named model-feature bag (see `qex.functionals.features`),
+    `inp` is the per-sample :class:`SCFInputs`; only its physics fields are read
+    (this is forward-only, so `inp.targets` is ignored and is typically empty).
+    `inp.features` is the named model-feature bag (see `qex.functionals.features`),
     forwarded to `get_veff` and consumed by the network; the SCF math ignores it.
     """
+    dm, eri, ao_grid, grid_weights = inp.dm, inp.eri, inp.ao_grid, inp.grid_weights
+    s1e, h1e, energy_nuc, nelectron = inp.s1e, inp.h1e, inp.energy_nuc, inp.nelectron
+    features = inp.features
+
     vhf, exc_energy, J = get_veff(
         dm, eri, ao_grid, grid_weights, params, xc_eval_fn,
         encoding=encoding, features=features,

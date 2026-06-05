@@ -142,22 +142,20 @@ def test_features_bag_carries_ctx():
     assert dp.has_descriptor_ctx
     # The full bag is available on the datapoint...
     assert set(dp.features) == {"grid_coords", "atom_coords"}
-    # ...and to_training_tuple narrows it to the model's declared features.
-    _, _, core, features, _ = dp.to_training_tuple(("grid_coords", "atom_coords"))
-    assert len(core) == 7  # core physics inputs, fixed
-    assert set(features) == {"grid_coords", "atom_coords"}
+    # ...and to_scf_inputs narrows it to the model's declared features.
+    inp = dp.to_scf_inputs(("grid_coords", "atom_coords"))
+    assert set(inp.features) == {"grid_coords", "atom_coords"}
 
 
 def test_features_bag_narrows_to_request():
     """A no-feature model gets an empty bag even when the datapoint carries ctx."""
     dp = _fake_datapoint("a", with_ctx=True)
-    _, _, core, features, _ = dp.to_training_tuple()  # required_features=()
-    assert len(core) == 7
-    assert features == {}
+    inp = dp.to_scf_inputs()  # required_features=()
+    assert inp.features == {}
 
 
 def test_dataset_roundtrip_without_pyscf(tmp_path):
-    """A fabricated dataset survives save -> load and yields training tuples."""
+    """A fabricated dataset survives save -> load and yields SCFInputs bundles."""
     ds = QexDataset(
         train=[_fake_datapoint("a"), _fake_datapoint("b")],
         val=[_fake_datapoint("c")],
@@ -169,9 +167,35 @@ def test_dataset_roundtrip_without_pyscf(tmp_path):
     assert len(loaded.train) == 2
     assert len(loaded.val) == 1
     assert len(loaded.test) == 1
-    # to_training_tuple packs (energy, coords_density, core, features, dm).
-    energy, coords_density, core, features, dm = loaded.train[0].to_training_tuple()
-    assert energy == pytest.approx(-1.0)
-    assert len(core) == 7  # core physics inputs
-    assert features == {}  # no optional features stored
-    assert dm.shape == (2, 2)
+    # to_scf_inputs packs the physics arrays + targets into one SCFInputs bundle.
+    inp = loaded.train[0].to_scf_inputs()
+    assert float(inp.targets["energy"]) == pytest.approx(-1.0)
+    assert set(inp.targets) == {"energy", "density", "dm"}  # no vxc on this fake
+    assert inp.features == {}  # no optional features stored
+    assert inp.dm.shape == (2, 2)
+
+
+def test_optional_vxc_target_roundtrips(tmp_path):
+    """A stored `vxc` reference target survives save -> load and lands in the bag.
+
+    `vxc` is an optional reference target (only a KS reference produces one); a
+    datapoint that carries it must round-trip it, and a datapoint without it must
+    simply omit the key — never fabricate one.
+    """
+    dp_with = _fake_datapoint("with_vxc")
+    dp_with.vxc = np.full((2, 2), 0.25)
+    dp_without = _fake_datapoint("no_vxc")  # vxc stays None
+
+    ds = QexDataset(train=[dp_with, dp_without], val=[], test=[])
+    out = tmp_path / "ds.h5"
+    save_dataset(ds, out)
+    loaded = load_dataset(out)
+
+    by_name = {dp.meta.name: dp for dp in loaded.train}
+    assert by_name["with_vxc"].vxc is not None
+    np.testing.assert_allclose(by_name["with_vxc"].vxc, 0.25)
+    assert by_name["no_vxc"].vxc is None
+
+    # ...and it surfaces in the target bag exactly when present.
+    assert "vxc" in by_name["with_vxc"].to_scf_inputs().targets
+    assert "vxc" not in by_name["no_vxc"].to_scf_inputs().targets

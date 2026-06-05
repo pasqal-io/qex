@@ -27,6 +27,7 @@ from pyscf import dft, gto
 from qex.functionals.mlp import GlobalMLP
 from qex.functionals.xc import make_eval_xc_global
 from qex.scf.implicit_diff import custom_fixed_point
+from qex.scf.inputs import SCFInputs
 from qex.scf.operators import get_ao_value
 from qex.scf.rks import rks_loss_scan
 
@@ -81,14 +82,29 @@ _FRAC = dict(
 )
 
 
+def _scf_inputs(inputs, features=None, targets=None) -> SCFInputs:
+    """Pack the fixture dict into the SCFInputs bundle the losses now take."""
+    bag = {
+        "energy": jnp.asarray(inputs["exact_energy"]),
+        "density": inputs["exact_density"],
+        "dm": inputs["dm"],
+    }
+    if targets:
+        bag.update(targets)
+    return SCFInputs(
+        dm=inputs["dm"], eri=inputs["eri"], ao_grid=inputs["ao_grid"],
+        grid_weights=inputs["grid_weights"], s1e=inputs["s1e"], h1e=inputs["h1e"],
+        energy_nuc=jnp.asarray(inputs["energy_nuc"]),
+        nelectron=jnp.asarray(inputs["nelectron"]),
+        features=features or {},
+        targets=bag,
+    )
+
+
 def _loss(inputs, params, **kw):
     return rks_loss_scan(
-        params, inputs["dm"], inputs["eri"], inputs["ao_grid"],
-        inputs["grid_weights"], inputs["s1e"], inputs["h1e"],
-        inputs["energy_nuc"], inputs["nelectron"],
-        inputs["exact_energy"], inputs["exact_density"], inputs["dm"],
-        xc_eval_fn=inputs["xc_eval_fn"], encoding="global",
-        **_FRAC, **kw,
+        params, _scf_inputs(inputs),
+        xc_eval_fn=inputs["xc_eval_fn"], encoding="global", **_FRAC, **kw,
     )
 
 
@@ -223,13 +239,19 @@ def test_implicit_grad_with_descriptor_features(h2_inputs):
     dm = jnp.asarray(mf.make_rdm1())
     rho = jnp.einsum("gi,ij,gj->g", ao, dm, ao)
 
+    inp = SCFInputs(
+        dm=dm, eri=jnp.asarray(mol.intor("int2e", aosym="s1")), ao_grid=ao,
+        grid_weights=jnp.asarray(mf.grids.weights),
+        s1e=jnp.asarray(mf.get_ovlp(mol)), h1e=jnp.asarray(mf.get_hcore(mol)),
+        energy_nuc=jnp.asarray(float(mol.energy_nuc())),
+        nelectron=jnp.asarray(int(mol.nelectron)),
+        features=features,
+        targets={"energy": jnp.asarray(float(mf.e_tot)), "density": rho, "dm": dm},
+    )
+
     def loss_of_params(p):
         return rks_loss_scan(
-            p, dm, jnp.asarray(mol.intor("int2e", aosym="s1")), ao,
-            jnp.asarray(mf.grids.weights), jnp.asarray(mf.get_ovlp(mol)),
-            jnp.asarray(mf.get_hcore(mol)), float(mol.energy_nuc()),
-            int(mol.nelectron), float(mf.e_tot), rho, dm, features,
-            xc_eval_fn=xc_eval_fn, encoding="global",
+            p, inp, xc_eval_fn=xc_eval_fn, encoding="global",
             max_cycle=20, energy_weight=1.0, density_weight=1.0,
             differentiation="implicit", **_FRAC,
         )

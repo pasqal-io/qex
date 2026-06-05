@@ -28,6 +28,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from qex.functionals.features import select
+from qex.scf.inputs import SCFInputs
 from qex.scf.operators import get_ao_value
 from qex.utils.plot import REFERENCE_COLOR, use_pltx_style
 
@@ -92,22 +93,22 @@ def evaluate_samples(
             "grid_coords": jnp.asarray(mf.grids.coords),
             "atom_coords": jnp.asarray(mol.atom_coords()),
         }
-        features = select(available, required_features)
+        # Forward-only eval: the SCF physics inputs + feature bag; no reference
+        # targets are needed (rks_energy returns the energy, scores nothing).
+        inp = SCFInputs(
+            dm=jnp.asarray(dm),
+            eri=jnp.asarray(mol.intor("int2e", aosym="s1")),
+            ao_grid=jnp.asarray(get_ao_value(mol, mf.grids.coords)),
+            grid_weights=jnp.asarray(mf.grids.weights),
+            s1e=jnp.asarray(mf.get_ovlp(mol)),
+            h1e=jnp.asarray(mf.get_hcore(mol)),
+            energy_nuc=jnp.asarray(float(mol.energy_nuc())),
+            nelectron=jnp.asarray(int(mol.nelectron)),
+            features=select(available, required_features),
+            targets={},
+        )
 
-        scf_args = [
-            params,
-            dm,
-            mol.intor("int2e", aosym="s1"),
-            get_ao_value(mol, mf.grids.coords),
-            mf.grids.weights,
-            mf.get_ovlp(mol),
-            mf.get_hcore(mol),
-            mol.energy_nuc(),
-            mol.nelectron,
-            features,
-        ]
-
-        pred_energy = float(scf_eval_jit(*scf_args))
+        pred_energy = float(scf_eval_jit(params, inp))
         predicted.append(pred_energy)
         reference.append(float(ref_energy))
         logger.debug(
@@ -146,7 +147,7 @@ def evaluate_dataset_split(
 
     The dataset-only counterpart to :func:`evaluate_samples`: instead of
     re-running PySCF per molecule, it consumes the precomputed tensors already
-    saved in each datapoint (via :meth:`Datapoint.to_training_tuple`). So a run
+    saved in each datapoint (via :meth:`Datapoint.to_scf_inputs`). So a run
     that trains from a pre-built ``.h5`` never imports PySCF for evaluation
     either.
 
@@ -170,15 +171,12 @@ def evaluate_dataset_split(
         logger.info("Running {} over {} stored datapoint(s)...", label, len(datapoints))
     iterator = tqdm(datapoints) if verbose else datapoints
     for dp in iterator:
-        ref_energy, _coords_density, core_inputs, bag, dm = dp.to_training_tuple()
-        # core_inputs is (eri, ao_grid, weights, ovlp, hcore, e_nuc, nelectron);
-        # the network gets exactly the feature keys it declared.
-        features = select(bag, required_features)
-        scf_args = [params, dm, *core_inputs, features]
-
-        pred_energy = float(scf_eval_jit(*scf_args))
+        # The bundle carries the physics inputs + the feature bag narrowed to the
+        # network's declared keys; `rks_energy` ignores the (training-only) targets.
+        inp = dp.to_scf_inputs(required_features)
+        pred_energy = float(scf_eval_jit(params, inp))
         predicted.append(pred_energy)
-        reference.append(float(ref_energy))
+        reference.append(float(dp.energy))
 
     predicted = np.array(predicted)
     reference = np.array(reference)

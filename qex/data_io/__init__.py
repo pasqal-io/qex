@@ -19,12 +19,17 @@ from qex.data_io.dataset import (
     read_config_hash,
     save_dataset,
 )
-from qex.data_io.dataset_generation import DataGenerator, MoleculeConfig
+from qex.data_io.dataset_generation import (
+    DataGenerator,
+    MoleculeConfig,
+    reference_vxc,
+)
 from qex.data_io.systems_file import load_systems_file, systems_file_hash
 
 __all__ = [
     "DataGenerator",
     "MoleculeConfig",
+    "reference_vxc",
     "load_systems_file",
     "systems_file_hash",
     "Datapoint",
