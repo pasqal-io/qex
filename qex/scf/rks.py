@@ -46,8 +46,8 @@ import jax.numpy as jnp
 from chex import Array
 from loguru import logger
 
-# from qex.linalg.generalized_eigensolver import generalized_eigh
-from eigh import eigh_gen as generalized_eigh
+from qex.linalg.generalized_eigensolver import generalized_eigh
+# from eigh import eigh_gen as generalized_eigh
 
 
 from qex.linalg.ks_solvers import lobpcg_solve, mcweeny_purify

@@ -5,6 +5,9 @@ import matplotlib.ticker as mticker
 import numpy as np
 import seaborn as sns
 
+# Color for reference elements (y=x lines, accuracy bands, ...). Kept constant
+# across all plots so references read the same everywhere.
+REFERENCE_COLOR = "black"
 
 class PlotStyle:
     """Reusable plotting style settings for scientific visualizations."""
@@ -341,6 +344,58 @@ def set_plot_style(
         use_tex=use_tex,
     )
     return style
+
+
+def use_pltx_style(palette_name="pasqal_diverging", palette_size=8):
+    """Apply the shared pltx look to subsequent matplotlib plots.
+
+    Gives every figure the same publication style: the pltx **Nature** preset
+    (fonts, sizes, tick directions) plus accessibility settings (progressive
+    line widths), with the color cycle set to a pltx palette so data series
+    without an explicit ``color=`` pick up the Pasqal brand colors.
+
+    All plotting stays plain matplotlib -- this only configures global
+    rcParams / the color cycle. Call once before plotting. Reference elements
+    (``y=x`` lines, accuracy bands) should use :data:`REFERENCE_COLOR` so they
+    stay black regardless of the palette.
+
+    Importing ``pltx`` also auto-registers the Pasqal colormaps
+    (``pasqal``, ``pasqal_contrast``, ``pasqal_diverging``) for use by name in
+    ``imshow``/``get_cmap``.
+
+    Parameters
+    ----------
+    palette_name : str
+        Name of the pltx/seaborn/matplotlib palette for the color cycle
+        (e.g. ``"pasqal_diverging"``, ``"plasma_r"``).
+    palette_size : int
+        Number of colors to sample from the palette for the cycle.
+
+    Examples
+    --------
+    >>> from qex.utils.plot import use_pltx_style
+    >>> use_pltx_style()
+    >>> # plain matplotlib from here on, Nature style + Pasqal color cycle
+    """
+    from cycler import cycler
+
+    import pltx.pyplot as pltx_plt
+    from pltx.colors import ColorPalette
+    from pltx.rcparams import apply_style_preset
+
+    # 1. Nature preset (fonts, sizes, tick directions) + accessibility.
+    apply_style_preset("nature")
+    pltx_plt.initialize_style(
+        vary_linewidth=True,
+        base_linewidth=1.0,
+        linewidth_progression_factor=1.3,
+    )
+
+    # 2. Override the color cycle with the chosen pltx palette. (The Nature
+    #    preset sets its own default cycle; we want the Pasqal colors.)
+    palette = ColorPalette(palette_name, palette_size)
+    colors = palette.get_colors(list(range(palette_size)))
+    plt.rcParams["axes.prop_cycle"] = cycler(color=colors)
 
 
 if __name__ == "__main__":

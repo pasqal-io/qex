@@ -48,10 +48,10 @@ model:
 
   qcnn:
     # n_grid must be divisible by n_features ** n_layers.
-    n_qubits: 2
-    n_features: 2
+    n_qubits: 4
+    n_features: 4
     n_layers: 2
-    n_var_layers: 1
+    n_var_layers: 2
     feature_map: direct
     head_features: [32]
     # List of (type, probability) pairs applied to every gate; types:
@@ -107,7 +107,7 @@ training:
   # not slow the training step). patience: stop early after this many
   # validations without improvement (null = no early stopping).
   n_val_iter: 50
-  patience: 5
+  patience: 100
 
 # SCF / KS-solve settings. `run_experiment` reads these from `scf.*` (see
 # qex.training.experiment._scf_kwargs).
@@ -153,7 +153,7 @@ scf:
   diis_start_cycle: 1
   diis_damping: 0.0
   # Fractional-occupation (finite-temperature) smearing.
-  frac_enabled: 0
+  frac_enabled: 1
   frac_theta: 0.04
   frac_mu: null
   frac_mu_shift: 0.001

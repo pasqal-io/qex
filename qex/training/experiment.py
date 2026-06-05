@@ -58,7 +58,7 @@ from qex.training.evaluate import (
     plot_dissociation_profile,
 )
 from qex.training.train import TrainHistory, train
-from qex.utils.logging import configure_logging
+from qex.utils.log import configure_logging
 
 # SCF kwargs that the DIIS loop understands but the scan loop does not. They are
 # stripped before training (which uses `rks_loss_scan`) and kept for evaluation.

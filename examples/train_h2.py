@@ -27,7 +27,7 @@ from loguru import logger
 from qex import Config
 from qex.data_io import DataGenerator
 from qex.scf import rks_energy, rks_loss_scan
-from qex.utils.logging import configure_logging
+from qex.utils.log import configure_logging
 from qex.training import (
     build_network,
     calculate_dissociation_profile,

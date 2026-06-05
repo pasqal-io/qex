@@ -19,6 +19,7 @@ import numpy as np
 from pyscf import gto, scf
 
 from qex.linalg.generalized_eigensolver import jax_eig, standard_eig
+from qex.utils.plot import use_pltx_style
 
 # Enable double precision
 jax.config.update("jax_enable_x64", True)
@@ -69,6 +70,7 @@ def compare_eigensolvers(mol_str, basis="631g"):
 
 def plot_comparison(results):
     """Plot the comparison results"""
+    use_pltx_style()
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
     # Plot eigenvalues

@@ -29,6 +29,7 @@ from tqdm import tqdm
 
 from qex.functionals.features import select
 from qex.scf.operators import get_ao_value
+from qex.utils.plot import REFERENCE_COLOR, use_pltx_style
 
 # Chemical accuracy: 1 kcal/mol ~= 1.6 mHa. Used as the parity-plot tolerance band.
 CHEMICAL_ACCURACY_HA = 1.6e-3
@@ -220,20 +221,20 @@ def parity_plot(
     pad = 0.05 * (hi - lo or 1.0)
     line = np.array([lo - pad, hi + pad])
 
+    use_pltx_style()
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.fill_between(
         line,
         line - tolerance,
         line + tolerance,
-        color="gray",
-        alpha=0.2,
+        color=REFERENCE_COLOR,
+        alpha=0.15,
         label=f"±{tolerance * 1e3:.1f} mHa (chemical accuracy)",
     )
-    ax.plot(line, line, "--", color="black", linewidth=1, label="y = x")
+    ax.plot(line, line, "--", color=REFERENCE_COLOR, linewidth=1, label="y = x")
     ax.scatter(
         reference,
         predicted,
-        color="red",
         s=40,
         zorder=3,
         label=f"MAE {metrics['mae']:.2e} Ha · NPE {metrics['npe']:.2e} Ha",
@@ -335,14 +336,16 @@ def plot_dissociation_profile(
     path_results: str | None = None,
 ):
     """Two-panel plot: energy curves + absolute error on a log axis."""
+    use_pltx_style()
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(10, 8), gridspec_kw={"height_ratios": [3, 1]}
     )
 
-    ax1.plot(bond_lengths, ref_energies, "o-", color="blue", label=f"Reference ({method})")
-    ax1.plot(bond_lengths, ml_energies, "s--", color="red", label="ML model")
+    ax1.plot(bond_lengths, ref_energies, "o-", color=REFERENCE_COLOR,
+             label=f"Reference ({method})")
+    ax1.plot(bond_lengths, ml_energies, "s--", label="ML model")
     ax1.set_ylabel("Energy (Hartree)")
-    ax1.set_title(f"H₂ Dissociation Profile - {exp_model} Model")
+    ax1.set_title(f"Dissociation Profile - {exp_model} Model")
     ax1.grid(True, linestyle="--", alpha=0.7)
     ax1.legend()
 
@@ -355,10 +358,9 @@ def plot_dissociation_profile(
         bond_lengths,
         abs_errors,
         "o-",
-        color="green",
         label=f"Absolute Error (MAE: {mae:.2e}, NPE: {npe:.2e})",
     )
-    ax2.axhspan(0, CHEMICAL_ACCURACY_HA, alpha=0.2, color="gray",
+    ax2.axhspan(0, CHEMICAL_ACCURACY_HA, alpha=0.15, color=REFERENCE_COLOR,
                 label="Chemical Accuracy (1.6 mHa)")
     ax2.set_xlabel("Bond Length (Å)")
     ax2.set_ylabel("Error (Hartree)")

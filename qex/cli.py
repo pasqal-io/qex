@@ -268,7 +268,7 @@ def _gen_data_command(argv: list[str]) -> int:
 
     # Imported lazily so `--help` doesn't pay the JAX/PySCF import cost.
     from qex.training import build_network, dataset_for_config
-    from qex.utils.logging import configure_logging
+    from qex.utils.log import configure_logging
 
     # gen-data doesn't go through run_experiment, so honor the log config here.
     configure_logging(
