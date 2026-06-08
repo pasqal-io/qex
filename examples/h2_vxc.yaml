@@ -64,8 +64,8 @@ training:
   # density. `vxc` needs an RKS reference (see above); `dm` works for any.
   target_weights:
     density: 1.0
-    vxc: 0.0
-    dm: 0.0
+    vxc: 1.0
+    dm: 1.0
   grad_clip: 0.5
   n_val_iter: 50
   patience: 5
