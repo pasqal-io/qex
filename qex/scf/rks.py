@@ -39,6 +39,7 @@ Differentiation mode
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 
 import jax
@@ -68,25 +69,45 @@ from qex.scf.operators import (
 )
 
 
-def _occ_step(mo_energy: Array, nelectron: int, frac_enabled: int, **frac_kwargs):
+@dataclass(frozen=True)
+class FracConfig:
+    """Fractional (Fermi-Dirac) occupation hyperparameters.
+
+    A frozen (hashable) bundle of the ``frac_*`` knobs that every SCF loop used
+    to thread as five separate keyword args plus a hand-built ``frac_kwargs``
+    dict. The public loss/energy functions still expose the flat ``frac_*``
+    kwargs (call sites unchanged); each builds one :class:`FracConfig` at the top
+    and passes the object inward. ``enabled`` stays an ``int`` (0/1) because it is
+    a static branch flag in `_occ_step` / `_solve_density`.
+    """
+
+    enabled: int = 1
+    theta: float = 0.04
+    mu: float | None = None
+    mu_shift: float = 0.001
+    step_grad: float = 0.6
+    max_steps: int = 100
+
+
+def _occ_step(mo_energy: Array, nelectron: int, frac: FracConfig):
     """Choose between fractional Fermi-Dirac occupations and aufbau.
 
-    `frac_enabled` is a static (compile-time) flag in every caller, so this is a
+    `frac.enabled` is a static (compile-time) flag in every caller, so this is a
     plain Python `if`, not `jax.lax.cond`: only the selected branch is traced.
     A `cond` would trace BOTH branches into the graph — pulling the whole
     fractional-occupation chemical-potential solve into an integer-aufbau run
     only to dead-code-eliminate it — needlessly inflating the jaxpr and compile
     time.
     """
-    if frac_enabled == 1:
+    if frac.enabled == 1:
         mo_occ, energy_entr, _mu, _loss = get_fractional_occupations_jax(
             mo_energy=mo_energy,
             n_electrons=nelectron,
-            theta=frac_kwargs["frac_theta"],
-            frac_mu=frac_kwargs["frac_mu"],
-            frac_mu_shift=frac_kwargs["frac_mu_shift"],
-            frac_step_grad=frac_kwargs["frac_step_grad"],
-            frac_max_steps=frac_kwargs["frac_max_steps"],
+            theta=frac.theta,
+            frac_mu=frac.mu,
+            frac_mu_shift=frac.mu_shift,
+            frac_step_grad=frac.step_grad,
+            frac_max_steps=frac.max_steps,
         )
         return mo_occ, energy_entr
     return get_occ(nelectron, mo_energy), jnp.array(0.0)
@@ -96,9 +117,8 @@ def _solve_density(
     fock: Array,
     s1e: Array,
     nelectron: int,
-    frac_enabled: int,
+    frac: FracConfig,
     solver: str,
-    frac_kwargs: dict,
 ):
     """Build the next 1-RDM from the Fock matrix via the chosen KS solver.
 
@@ -133,9 +153,9 @@ def _solve_density(
     n_occ = nelectron // 2
 
     if solver == "purify":
-        # frac_enabled is a static (Python) arg in both SCF loops, so this
+        # frac.enabled is a static (Python) arg in both SCF loops, so this
         # branch is resolved at trace time — no runtime cost.
-        if frac_enabled == 1:
+        if frac.enabled == 1:
             raise ValueError(
                 "solver='purify' supports integer aufbau only; set "
                 "frac_enabled=0 (or use solver='dense'/'lobpcg' for "
@@ -167,7 +187,7 @@ def _solve_density(
         # that combination up front rather than returning silent NaNs.
         n_basis = fock.shape[-1]
         k_max = (n_basis - 1) // 5
-        if frac_enabled == 1 and k_max <= n_occ:
+        if frac.enabled == 1 and k_max <= n_occ:
             raise ValueError(
                 f"solver='lobpcg' with fractional occupation needs LOBPCG to "
                 f"compute states above the HOMO, but the basis is too small: "
@@ -179,9 +199,7 @@ def _solve_density(
     else:  # "dense"
         mo_energy, mo_coeff = generalized_eigh(fock, s1e)
 
-    mo_occ, energy_entr = _occ_step(
-        mo_energy, nelectron, frac_enabled, **frac_kwargs,
-    )
+    mo_occ, energy_entr = _occ_step(mo_energy, nelectron, frac)
     return make_rdm1_custom(mo_coeff, mo_occ), energy_entr
 
 
@@ -308,12 +326,13 @@ def rks_loss(
     diis_state = initialize_diis(diis_max_vec)
     loss = 0.0
 
-    frac_kwargs = dict(
-        frac_theta=frac_theta,
-        frac_mu=frac_mu,
-        frac_mu_shift=frac_mu_shift,
-        frac_step_grad=frac_step_grad,
-        frac_max_steps=frac_max_steps,
+    frac = FracConfig(
+        enabled=frac_enabled,
+        theta=frac_theta,
+        mu=frac_mu,
+        mu_shift=frac_mu_shift,
+        step_grad=frac_step_grad,
+        max_steps=frac_max_steps,
     )
 
     for cycle in range(max_cycle):
@@ -331,7 +350,7 @@ def rks_loss(
             )
 
         mo_energy, mo_coeff = generalized_eigh(fock, s1e)
-        mo_occ, energy_entr = _occ_step(mo_energy, nelectron, frac_enabled, **frac_kwargs)
+        mo_occ, energy_entr = _occ_step(mo_energy, nelectron, frac)
 
         dm = make_rdm1_custom(mo_coeff, mo_occ)
 
@@ -440,12 +459,13 @@ def rks_loss_scan(
     features, targets = inp.features, inp.targets
     exact_energy = targets["energy"]  # density/vxc/dm scored via the registry
 
-    frac_kwargs = dict(
-        frac_theta=frac_theta,
-        frac_mu=frac_mu,
-        frac_mu_shift=frac_mu_shift,
-        frac_step_grad=frac_step_grad,
-        frac_max_steps=frac_max_steps,
+    frac = FracConfig(
+        enabled=frac_enabled,
+        theta=frac_theta,
+        mu=frac_mu,
+        mu_shift=frac_mu_shift,
+        step_grad=frac_step_grad,
+        max_steps=frac_max_steps,
     )
 
     if differentiation not in ("unroll", "implicit"):
@@ -461,7 +481,7 @@ def rks_loss_scan(
             features=features, xc_eval_fn=xc_eval_fn, encoding=encoding,
             max_cycle=max_cycle, energy_weight=energy_weight,
             density_weight=density_weight, target_weights=target_weights,
-            frac_enabled=frac_enabled, frac_kwargs=frac_kwargs, solver=solver,
+            frac=frac, solver=solver,
         )
 
     fock_size = h1e.size
@@ -500,7 +520,7 @@ def rks_loss_scan(
             )
 
         dm_new, energy_entr = _solve_density(
-            fock, s1e, nelectron, frac_enabled, solver, frac_kwargs,
+            fock, s1e, nelectron, frac, solver,
         )
         vhf, exc_energy, J = get_veff(
             dm_new, eri, ao_grid, grid_weights, params, xc_eval_fn,
@@ -551,8 +571,7 @@ def _rks_loss_implicit(
     energy_weight: float,
     density_weight: float,
     target_weights: tuple,
-    frac_enabled: int,
-    frac_kwargs: dict,
+    frac: FracConfig,
     solver: str,
 ) -> Array:
     """Implicit-differentiation SCF loss (see `rks_loss_scan` docstring).
@@ -598,7 +617,7 @@ def _rks_loss_implicit(
         fock = h1e_t + vhf
         dm_new, _energy_entr = _solve_density(
             fock, s1e_t, jax.lax.stop_gradient(nelectron_t),
-            frac_enabled, solver, frac_kwargs,
+            frac, solver,
         )
         return dm_new
 
@@ -619,7 +638,7 @@ def _rks_loss_implicit(
     )
     fock = h1e + vhf
     _dm_star, energy_entr = _solve_density(
-        fock, s1e, nelectron, frac_enabled, solver, frac_kwargs,
+        fock, s1e, nelectron, frac, solver,
     )
     e_tot = energy_tot(dm_final, h1e, J, exc_energy, energy_nuc) + energy_entr
 
@@ -679,12 +698,13 @@ def rks_energy(
 
     diis_state = initialize_diis(diis_max_vec) if use_diis else None
 
-    frac_kwargs = dict(
-        frac_theta=frac_theta,
-        frac_mu=frac_mu,
-        frac_mu_shift=frac_mu_shift,
-        frac_step_grad=frac_step_grad,
-        frac_max_steps=frac_max_steps,
+    frac = FracConfig(
+        enabled=frac_enabled,
+        theta=frac_theta,
+        mu=frac_mu,
+        mu_shift=frac_mu_shift,
+        step_grad=frac_step_grad,
+        max_steps=frac_max_steps,
     )
 
     for cycle in range(max_cycle):
@@ -702,7 +722,7 @@ def rks_energy(
             )
 
         dm, energy_entr = _solve_density(
-            fock, s1e, nelectron, frac_enabled, solver, frac_kwargs,
+            fock, s1e, nelectron, frac, solver,
         )
 
         vhf, exc_energy, J = get_veff(
